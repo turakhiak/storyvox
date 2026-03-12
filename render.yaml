@@ -1,0 +1,24 @@
+# render.yaml — Blueprint for Render deployment
+services:
+  - type: web
+    name: storyvox-api
+    runtime: python
+    region: oregon
+    rootDir: server
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: storyvox-db
+          property: connectionString
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+    plan: free
+
+databases:
+  - name: storyvox-db
+    plan: free
+    region: oregon
