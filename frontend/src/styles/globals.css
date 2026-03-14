@@ -67,7 +67,7 @@
 
   /* Screenplay segment styles */
   .segment-dialogue {
-    @apply pl-4 border-l-3 py-2;
+    @apply pl-4 border-l-2 py-2;
   }
   .segment-narration {
     @apply italic text-ink-600 dark:text-ink-400 py-2;
