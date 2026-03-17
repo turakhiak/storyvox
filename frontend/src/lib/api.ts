@@ -14,7 +14,40 @@ export interface Book {
   total_words: number;
   description: string | null;
   status: string;
+  listen_bookmark: number;
+  batch_status: string;
+  batch_progress: BatchProgress | null;
   created_at: string;
+}
+
+export interface BatchProgress {
+  current_chapter: number | null;
+  current_index: number;
+  total_in_batch: number;
+  completed: string[];
+  failed: string[];
+  chapter_numbers?: number[];
+  error?: string;
+}
+
+export interface BatchStatus {
+  book_id: string;
+  listen_bookmark: number;
+  batch_status: string;
+  batch_progress: BatchProgress | null;
+  total_chapters: number;
+  chapters: ChapterStatus[];
+}
+
+export interface ChapterStatus {
+  number: number;
+  title: string | null;
+  chapter_id: string;
+  status: string;
+  screenplay_status: string | null;
+  audio_status: string | null;
+  score: number | null;
+  is_non_story?: boolean;
 }
 
 export interface Chapter {
@@ -49,6 +82,7 @@ export interface ScreenplaySegment {
   character_name: string | null;
   text: string;
   emotion: string;
+  audio_url: string | null;
 }
 
 export interface Screenplay {
@@ -56,6 +90,7 @@ export interface Screenplay {
   chapter_id: string;
   mode: string;
   status: string;
+  audio_status: string;
   total_rounds: number;
   final_scores: Record<string, number> | null;
   weighted_avg: number | null;
@@ -146,6 +181,29 @@ export async function getCharacters(bookId: string): Promise<Character[]> {
   return request(`/api/books/${bookId}/characters`);
 }
 
+export async function updateCharacterVoice(
+  bookId: string,
+  characterId: string,
+  voiceId: string
+): Promise<Character> {
+  return request(`/api/books/${bookId}/characters/${characterId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ voice_id: voiceId }),
+  });
+}
+
+export interface Voice {
+  id: string;
+  label: string;
+  gender: string;
+  accent: string;
+  description: string;
+}
+
+export async function getVoices(): Promise<Voice[]> {
+  return request("/api/voices");
+}
+
 // === Screenplay ===
 
 export async function generateScreenplay(
@@ -178,6 +236,42 @@ export async function deleteScreenplay(
   await request(`/api/chapters/${chapterId}/screenplay?mode=${mode}`, {
     method: "DELETE",
   });
+}
+
+export async function generateAudio(
+  chapterId: string,
+  mode: string = "radio_play",
+  force: boolean = false
+): Promise<Screenplay> {
+  return request(`/api/chapters/${chapterId}/screenplay/audio?mode=${mode}&force=${force}`, {
+    method: "POST",
+  });
+}
+
+// === Batch Processing ===
+
+export async function batchGenerate(
+  bookId: string,
+  options?: { count?: number; startFrom?: number; audio?: boolean; mode?: string }
+): Promise<Book> {
+  const params = new URLSearchParams();
+  params.set("mode", options?.mode || "radio_play");
+  if (options?.count) params.set("count", String(options.count));
+  if (options?.startFrom !== undefined) params.set("start_from", String(options.startFrom));
+  if (options?.audio !== undefined) params.set("audio", String(options.audio));
+  return request(`/api/books/${bookId}/batch/generate?${params}`, { method: "POST" });
+}
+
+export async function getBatchStatus(bookId: string): Promise<BatchStatus> {
+  return request(`/api/books/${bookId}/batch/status`);
+}
+
+export async function stopBatch(bookId: string): Promise<void> {
+  await request(`/api/books/${bookId}/batch/stop`, { method: "POST" });
+}
+
+export async function updateBookmark(bookId: string, chapterNum: number): Promise<void> {
+  await request(`/api/books/${bookId}/bookmark?chapter_num=${chapterNum}`, { method: "PATCH" });
 }
 
 // === Helpers ===

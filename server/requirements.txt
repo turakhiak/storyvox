@@ -8,9 +8,13 @@ python-dotenv==1.0.1
 ebooklib==0.18
 beautifulsoup4==4.12.3
 lxml==5.3.0
-google-generativeai==0.8.3
+google-genai>=0.8.0
 httpx==0.27.2
 pydantic==2.9.0
 pydantic-settings==2.5.2
 aiofiles==24.1.0
 uuid7==0.1.0
+edge-tts==6.1.12
+pydub==0.25.1
+groq==0.11.0
+ollama

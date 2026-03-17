@@ -11,7 +11,8 @@ from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from models.database import init_db
-from routers import books, characters, screenplay
+from routers import books, characters, screenplay, batch
+from routers.characters import voices_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,10 +54,16 @@ static_dir = os.path.join(settings.upload_dir, "covers")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static/covers", StaticFiles(directory=static_dir), name="covers")
 
+audio_dir = os.path.join(settings.upload_dir, "audio")
+os.makedirs(audio_dir, exist_ok=True)
+app.mount("/static/audio", StaticFiles(directory=audio_dir), name="audio")
+
 # Routers
 app.include_router(books.router)
 app.include_router(characters.router)
 app.include_router(screenplay.router)
+app.include_router(batch.router)
+app.include_router(voices_router)
 
 
 @app.get("/")

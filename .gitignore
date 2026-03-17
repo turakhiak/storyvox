@@ -29,3 +29,18 @@ server/*.db
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs
+server/*.log
+server/pull.log
+
+# Debug / one-off scripts
+server/debug_*.py
+server/check_*.py
+server/inspect_*.py
+server/list_*.py
+server/test*.py
+server/bin/
+
+# TS build cache
+frontend/tsconfig.tsbuildinfo

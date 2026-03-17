@@ -12,8 +12,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body className="min-h-screen antialiased">
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <body className="min-h-screen antialiased" suppressHydrationWarning>
         {/* Subtle film grain texture */}
         <div className="grain-overlay" />
         {children}

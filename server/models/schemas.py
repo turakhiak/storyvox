@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Union, Any
 from datetime import datetime
 
 
@@ -13,6 +13,9 @@ class BookResponse(BaseModel):
     total_words: int
     description: Optional[str] = None
     status: str
+    listen_bookmark: int = 0
+    batch_status: str = "idle"
+    batch_progress: Optional[dict] = None
     created_at: Optional[datetime] = None
 
     class Config:
@@ -69,6 +72,7 @@ class ScreenplaySegmentResponse(BaseModel):
     character_name: Optional[str] = None
     text: str
     emotion: str = "neutral"
+    audio_url: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -79,6 +83,7 @@ class ScreenplayResponse(BaseModel):
     chapter_id: str
     mode: str
     status: str
+    audio_status: str
     total_rounds: int
     final_scores: Optional[dict] = None
     weighted_avg: Optional[float] = None

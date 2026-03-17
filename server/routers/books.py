@@ -4,7 +4,7 @@ Books API — upload epub, list library, get book details.
 import os
 import uuid
 import shutil
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from models.database import get_db, Book, Chapter
@@ -122,6 +122,17 @@ async def get_chapter(book_id: str, chapter_num: int, db: Session = Depends(get_
         "word_count": chapter.word_count,
         "status": chapter.status,
     }
+
+
+@router.patch("/{book_id}/bookmark")
+async def update_bookmark(book_id: str, chapter_num: int = Query(...), db: Session = Depends(get_db)):
+    """Update the listening bookmark (last chapter the user listened to)."""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(404, "Book not found")
+    book.listen_bookmark = chapter_num
+    db.commit()
+    return {"book_id": book_id, "listen_bookmark": chapter_num}
 
 
 @router.delete("/{book_id}")

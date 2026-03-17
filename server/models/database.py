@@ -6,6 +6,7 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from sqlalchemy.sql import func
 from config import settings
 import uuid
+import logging
 
 Base = declarative_base()
 
@@ -40,6 +41,9 @@ class Book(Base):
     total_words = Column(Integer, default=0)
     description = Column(Text, nullable=True)
     status = Column(String, default="imported")  # imported | processing | ready
+    listen_bookmark = Column(Integer, default=0)  # Last chapter number the user has listened to
+    batch_status = Column(String, default="idle")  # idle | processing | paused | failed
+    batch_progress = Column(JSON, nullable=True)   # {"current_chapter": 3, "total_in_batch": 5, "completed": [1,2], "failed": []}
     created_at = Column(DateTime, server_default=func.now())
 
     user = relationship("User", back_populates="books")
@@ -90,9 +94,11 @@ class Screenplay(Base):
     chapter_id = Column(String, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
     mode = Column(String, nullable=False)  # faithful | radio_play
     status = Column(String, default="processing")
+    audio_status = Column(String, default="none") # none | processing | complete | failed
     total_rounds = Column(Integer, default=0)
     final_scores = Column(JSON, nullable=True)
     weighted_avg = Column(Float, nullable=True)
+    sound_plan = Column(JSON, nullable=True) # Store the production plan
     created_at = Column(DateTime, server_default=func.now())
 
     chapter = relationship("Chapter", back_populates="screenplays")
@@ -145,8 +151,36 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _migrate_add_columns():
+    """Add new columns to existing tables (SQLite doesn't support ALTER TABLE IF NOT EXISTS)."""
+    import sqlite3
+    if "sqlite" not in settings.database_url:
+        return
+    db_path = settings.database_url.replace("sqlite:///", "")
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        # Get existing columns for books table
+        cursor.execute("PRAGMA table_info(books)")
+        existing = {row[1] for row in cursor.fetchall()}
+        migrations = {
+            "listen_bookmark": "ALTER TABLE books ADD COLUMN listen_bookmark INTEGER DEFAULT 0",
+            "batch_status": "ALTER TABLE books ADD COLUMN batch_status VARCHAR DEFAULT 'idle'",
+            "batch_progress": "ALTER TABLE books ADD COLUMN batch_progress TEXT",
+        }
+        for col, sql in migrations.items():
+            if col not in existing:
+                cursor.execute(sql)
+                logging.getLogger(__name__).info(f"Migration: added '{col}' to books table")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Migration check failed (non-critical): {e}")
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    _migrate_add_columns()
 
 
 def get_db():
