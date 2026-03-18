@@ -42,7 +42,7 @@ app.add_middleware(
         settings.frontend_url,
         "http://localhost:3000",
         "http://localhost:3001",
-        "https://*.vercel.app",
+        "https://storyvox-frontend.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
