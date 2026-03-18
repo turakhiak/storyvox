@@ -152,30 +152,67 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def _migrate_add_columns():
-    """Add new columns to existing tables (SQLite doesn't support ALTER TABLE IF NOT EXISTS)."""
-    import sqlite3
-    if "sqlite" not in settings.database_url:
-        return
-    db_path = settings.database_url.replace("sqlite:///", "")
+    """
+    Add missing columns to existing tables — works for both SQLite and PostgreSQL.
+    PostgreSQL supports ALTER TABLE ... ADD COLUMN IF NOT EXISTS natively.
+    SQLite does not, so we check PRAGMA table_info first.
+    """
+    logger = logging.getLogger(__name__)
+    is_postgres = "postgresql" in settings.database_url or "postgres" in settings.database_url
+
+    # (table, column, postgres_type, sqlite_type, default_sql)
+    MIGRATIONS = [
+        # books
+        ("books", "listen_bookmark",  "INTEGER",         "INTEGER",  "DEFAULT 0"),
+        ("books", "batch_status",     "VARCHAR",         "VARCHAR",  "DEFAULT 'idle'"),
+        ("books", "batch_progress",   "TEXT",            "TEXT",     ""),
+        # screenplays
+        ("screenplays", "audio_status",  "VARCHAR",      "VARCHAR",  "DEFAULT 'none'"),
+        ("screenplays", "final_scores",  "TEXT",         "TEXT",     ""),
+        ("screenplays", "weighted_avg",  "FLOAT",        "REAL",     ""),
+        ("screenplays", "sound_plan",    "TEXT",         "TEXT",     ""),
+        # screenplay_segments
+        ("screenplay_segments", "audio_url",    "VARCHAR", "VARCHAR", ""),
+        ("screenplay_segments", "duration_ms",  "INTEGER", "INTEGER", ""),
+        ("screenplay_segments", "timestamp_ms", "INTEGER", "INTEGER", ""),
+        # revision_rounds
+        ("revision_rounds", "weighted_avg", "FLOAT", "REAL", ""),
+        ("revision_rounds", "is_best",      "BOOLEAN", "INTEGER", "DEFAULT 0"),
+    ]
+
     try:
-        conn = sqlite3.connect(db_path)
+        conn = engine.raw_connection()
         cursor = conn.cursor()
-        # Get existing columns for books table
-        cursor.execute("PRAGMA table_info(books)")
-        existing = {row[1] for row in cursor.fetchall()}
-        migrations = {
-            "listen_bookmark": "ALTER TABLE books ADD COLUMN listen_bookmark INTEGER DEFAULT 0",
-            "batch_status": "ALTER TABLE books ADD COLUMN batch_status VARCHAR DEFAULT 'idle'",
-            "batch_progress": "ALTER TABLE books ADD COLUMN batch_progress TEXT",
-        }
-        for col, sql in migrations.items():
-            if col not in existing:
-                cursor.execute(sql)
-                logging.getLogger(__name__).info(f"Migration: added '{col}' to books table")
-        conn.commit()
+
+        if is_postgres:
+            # PostgreSQL: ADD COLUMN IF NOT EXISTS is safe to run repeatedly
+            for table, col, pg_type, _, default in MIGRATIONS:
+                sql = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {pg_type} {default}".strip()
+                try:
+                    cursor.execute(sql)
+                    conn.commit()
+                    logger.info(f"Migration (pg): ensured '{col}' on {table}")
+                except Exception as col_err:
+                    conn.rollback()
+                    logger.debug(f"Migration (pg) skipped {table}.{col}: {col_err}")
+        else:
+            # SQLite: check PRAGMA table_info before each ALTER
+            for table, col, _, sqlite_type, default in MIGRATIONS:
+                try:
+                    cursor.execute(f"PRAGMA table_info({table})")
+                    existing = {row[1] for row in cursor.fetchall()}
+                    if col not in existing:
+                        sql = f"ALTER TABLE {table} ADD COLUMN {col} {sqlite_type} {default}".strip()
+                        cursor.execute(sql)
+                        conn.commit()
+                        logger.info(f"Migration (sqlite): added '{col}' to {table}")
+                except Exception as col_err:
+                    conn.rollback()
+                    logger.debug(f"Migration (sqlite) skipped {table}.{col}: {col_err}")
+
         conn.close()
     except Exception as e:
-        logging.getLogger(__name__).warning(f"Migration check failed (non-critical): {e}")
+        logger.warning(f"Migration check failed (non-critical): {e}")
 
 
 def init_db():
