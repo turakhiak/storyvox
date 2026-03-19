@@ -144,16 +144,23 @@ class GeminiClient:
             try:
                 config = genai_types.GenerateContentConfig(**gen_config_kwargs)
                 loop = asyncio.get_running_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: self.client.models.generate_content(
-                        model=self.model_name,
-                        contents=user,
-                        config=config,
+                # 120s timeout — if Gemini hangs it won't block the batch task forever
+                response = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: self.client.models.generate_content(
+                            model=self.model_name,
+                            contents=user,
+                            config=config,
+                        ),
                     ),
+                    timeout=120,
                 )
                 logger.debug(f"Gemini response (first 200): {response.text[:200]}")
                 return response.text
+
+            except asyncio.TimeoutError:
+                raise ProviderError(f"Gemini timed out after 120s ({self.model_name})")
 
             except Exception as e:
                 err_str = str(e)
@@ -234,20 +241,27 @@ class GroqClient:
         for attempt in range(max_retries):
             try:
                 loop = asyncio.get_running_loop()
-                completion = await loop.run_in_executor(
-                    None,
-                    lambda: self.client.chat.completions.create(
-                        messages=[
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user},
-                        ],
-                        model=self.model_name,
-                        temperature=temperature,
-                        response_format={"type": "json_object"} if response_schema else None,
+                # 90s timeout — if Groq hangs it won't block the batch task forever
+                completion = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: self.client.chat.completions.create(
+                            messages=[
+                                {"role": "system", "content": system},
+                                {"role": "user", "content": user},
+                            ],
+                            model=self.model_name,
+                            temperature=temperature,
+                            response_format={"type": "json_object"} if response_schema else None,
+                        ),
                     ),
+                    timeout=90,
                 )
                 logger.debug(f"Groq response (first 200): {completion.choices[0].message.content[:200]}")
                 return completion.choices[0].message.content
+
+            except asyncio.TimeoutError:
+                raise ProviderError(f"Groq timed out after 90s")
 
             except Exception as e:
                 err_str = str(e)

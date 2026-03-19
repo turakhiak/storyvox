@@ -576,12 +576,23 @@ function ProductionTab({
             </div>
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex gap-3 flex-wrap">
             {isProcessing ? (
-              <button onClick={handleStop} className="btn-ghost text-stage-red border-stage-red/30 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4" />
-                Stop Batch
-              </button>
+              <>
+                <button
+                  onClick={handleReset}
+                  disabled={loading}
+                  className="btn-ghost text-ink-500 border-ink-300 dark:border-ink-600 flex items-center gap-2 text-sm"
+                  title="Force-clear a stuck batch"
+                >
+                  {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  Force Reset
+                </button>
+                <button onClick={handleStop} className="btn-ghost text-stage-red border-stage-red/30 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4" />
+                  Stop Batch
+                </button>
+              </>
             ) : (
               <>
                 <button

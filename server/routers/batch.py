@@ -7,6 +7,7 @@ Key design:
 - If a provider fails mid-batch, completed chapters are preserved
 - Tracks batch_status and batch_progress on the Book record
 """
+import time
 import json
 import logging
 import asyncio
@@ -26,6 +27,9 @@ from config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/books/{book_id}/batch", tags=["batch"])
 
+# If a batch has been "processing" for longer than this, it crashed silently
+STALE_BATCH_MINUTES = 20
+
 
 async def background_batch_process(
     book_id: str,
@@ -40,11 +44,14 @@ async def background_batch_process(
     Processes one chapter at a time. If a chapter fails, it's marked as failed but
     the batch continues with the remaining chapters. Progress is saved after each chapter.
     """
-    db = next(db_factory())
     completed = []
     failed = []
+    db = None
 
     try:
+        # DB session creation is now INSIDE try so failures here still reset batch_status
+        db = next(db_factory())
+
         book = db.query(Book).filter(Book.id == book_id).first()
         if not book:
             logger.error(f"Batch: Book {book_id} not found")
@@ -88,6 +95,7 @@ async def background_batch_process(
                 "total_in_batch": len(chapter_ids),
                 "completed": completed,
                 "failed": failed,
+                "started_at": book.batch_progress.get("started_at", time.time()) if book.batch_progress else time.time(),
             }
             db.commit()
 
@@ -120,11 +128,15 @@ async def background_batch_process(
             db.refresh(screenplay)
 
             try:
-                # Run the pipeline
-                result = await pipeline.process_chapter(
-                    chapter_text=chapter.raw_text,
-                    character_bible=character_bible,
-                    mode=mode,
+                # Run the pipeline (with a per-chapter timeout so a hung LLM call
+                # can't lock the batch forever)
+                result = await asyncio.wait_for(
+                    pipeline.process_chapter(
+                        chapter_text=chapter.raw_text,
+                        character_bible=character_bible,
+                        mode=mode,
+                    ),
+                    timeout=900,  # 15 min max per chapter
                 )
 
                 # Save revision rounds
@@ -183,8 +195,20 @@ async def background_batch_process(
 
                 completed.append(chapter_id)
 
+            except asyncio.TimeoutError:
+                logger.error(f"  Chapter {chapter.number} timed out after 15 minutes")
+                try:
+                    db.rollback()
+                    screenplay = db.query(Screenplay).filter(Screenplay.id == screenplay.id).first()
+                    if screenplay:
+                        screenplay.status = "failed"
+                        db.commit()
+                except Exception:
+                    pass
+                failed.append(chapter_id)
+
             except Exception as e:
-                logger.error(f"  Chapter {chapter.number} failed: {e}")
+                logger.error(f"  Chapter {chapter.number} failed: {type(e).__name__}: {e}")
                 try:
                     db.rollback()
                     screenplay = db.query(Screenplay).filter(Screenplay.id == screenplay.id).first()
@@ -216,21 +240,25 @@ async def background_batch_process(
         )
 
     except Exception as e:
-        logger.error(f"Batch processing error: {e}")
+        logger.error(f"Batch processing error: {type(e).__name__}: {e}", exc_info=True)
+        # Always try to reset batch_status — even if db was never opened
         try:
+            if db is None:
+                db = next(db_factory())
             book = db.query(Book).filter(Book.id == book_id).first()
             if book:
                 book.batch_status = "failed"
                 book.batch_progress = {
                     "completed": completed,
                     "failed": failed,
-                    "error": str(e)[:200],
+                    "error": f"{type(e).__name__}: {str(e)[:200]}",
                 }
                 db.commit()
-        except Exception:
-            pass
+        except Exception as cleanup_err:
+            logger.error(f"Could not reset batch_status after failure: {cleanup_err}")
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 @router.post("/generate", response_model=BookResponse, status_code=202)
@@ -254,7 +282,20 @@ async def batch_generate(
         raise HTTPException(404, "Book not found")
 
     if book.batch_status == "processing":
-        raise HTTPException(409, "A batch is already processing for this book. Wait for it to finish.")
+        # Auto-reset if the batch appears stale (no progress for > STALE_BATCH_MINUTES)
+        progress = book.batch_progress or {}
+        started_at = progress.get("started_at", 0)
+        age_minutes = (time.time() - started_at) / 60 if started_at else 999
+
+        if age_minutes > STALE_BATCH_MINUTES:
+            logger.warning(
+                f"Auto-resetting stale batch for book {book_id} "
+                f"(age: {age_minutes:.1f} min, threshold: {STALE_BATCH_MINUTES} min)"
+            )
+            book.batch_status = "idle"
+            db.commit()
+        else:
+            raise HTTPException(409, "A batch is already processing for this book. Wait for it to finish.")
 
     batch_size = count or settings.batch_size
     start_chapter = start_from if start_from is not None else (book.listen_bookmark or 0) + 1
@@ -294,9 +335,9 @@ async def batch_generate(
         # else: skip — chapter already has a complete screenplay
 
     if not chapter_ids_to_process:
-        raise HTTPException(200, "All selected chapters already have complete screenplays")
+        raise HTTPException(409, "All selected chapters already have complete screenplays. Advance your bookmark to generate the next batch.")
 
-    # Update book status
+    # Update book status — record start time so staleness check works
     book.batch_status = "processing"
     book.batch_progress = {
         "current_chapter": chapters[0].number,
@@ -305,6 +346,7 @@ async def batch_generate(
         "completed": [],
         "failed": [],
         "chapter_numbers": [ch.number for ch in chapters],
+        "started_at": time.time(),
     }
     db.commit()
     db.refresh(book)
@@ -360,11 +402,17 @@ async def batch_status(
             "is_non_story": is_non_story_chapter(ch, book.total_chapters),
         })
 
+    # Include staleness info so UI can warn the user
+    progress = book.batch_progress or {}
+    started_at = progress.get("started_at", 0)
+    batch_age_minutes = round((time.time() - started_at) / 60, 1) if started_at else None
+
     return {
         "book_id": book_id,
         "listen_bookmark": book.listen_bookmark or 0,
         "batch_status": book.batch_status or "idle",
         "batch_progress": book.batch_progress,
+        "batch_age_minutes": batch_age_minutes,
         "total_chapters": book.total_chapters,
         "chapters": chapter_statuses,
     }
@@ -399,11 +447,8 @@ async def reset_batch(
     """
     Force-reset a stuck batch back to 'idle'.
 
-    Use this when a previous generate request failed mid-way (e.g. a server
-    cold-start timeout) and left batch_status stuck on 'processing'.
-    Safe to call at any time — it does NOT cancel an actively-running batch
-    (the background task will overwrite this back to 'idle' when it finishes),
-    but if no task is running the status will be cleared immediately.
+    Use this when a previous generate request failed mid-way and left
+    batch_status stuck on 'processing' or 'failed'.
     """
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
