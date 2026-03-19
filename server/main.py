@@ -53,15 +53,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — allow localhost for dev, the configured frontend URL, and all Vercel preview/prod deploys
+_cors_origins = list(filter(None, [
+    settings.frontend_url,
+    "http://localhost:3000",
+    "http://localhost:3001",
+]))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        settings.frontend_url,
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "https://storyvox-frontend.vercel.app",
-    ],
+    allow_origins=_cors_origins,
+    # Covers *.vercel.app (all preview + production Vercel deployments)
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
