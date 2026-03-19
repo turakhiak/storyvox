@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "@/styles/globals.css";
+import ServerKeepAlive from "@/components/ServerKeepAlive";
 
 export const metadata: Metadata = {
   title: "StoryVox — Turn Books into Radio Plays",
@@ -16,6 +17,8 @@ export default function RootLayout({
       <body className="min-h-screen antialiased" suppressHydrationWarning>
         {/* Subtle film grain texture */}
         <div className="grain-overlay" />
+        {/* Keeps Render's free-tier server warm while the tab is open */}
+        <ServerKeepAlive />
         {children}
       </body>
     </html>

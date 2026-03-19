@@ -127,10 +127,10 @@ export interface RevisionRound {
 }
 
 // Delays (ms) per retry attempt for cold-start recovery.
-// Render free tier takes 30-60s to wake up, so space retries across that window.
-const COLD_START_DELAYS = [10_000, 15_000, 20_000]; // ~45s total budget
+// Render free tier can take up to 60-90s to wake up; space retries to cover the full window.
+const COLD_START_DELAYS = [8_000, 12_000, 20_000, 30_000]; // ~70s total budget
 
-async function request<T>(path: string, options?: RequestInit, retries = 3): Promise<T> {
+async function request<T>(path: string, options?: RequestInit, retries = 4): Promise<T> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(`${API_URL}${path}`, {
@@ -177,7 +177,7 @@ export async function uploadBook(file: File): Promise<Book> {
   const formData = new FormData();
   formData.append("file", file);
 
-  for (let attempt = 0; attempt <= 3; attempt++) {
+  for (let attempt = 0; attempt <= 4; attempt++) {
     const res = await fetch(`${API_URL}/api/books`, {
       method: "POST",
       body: formData,
@@ -185,7 +185,7 @@ export async function uploadBook(file: File): Promise<Book> {
 
     if (!res.ok) {
       const isUnavailable = res.status === 503 || res.status === 502 || res.status === 504;
-      if (isUnavailable && attempt < 3) {
+      if (isUnavailable && attempt < 4) {
         await new Promise(r => setTimeout(r, COLD_START_DELAYS[attempt] ?? 15_000));
         continue;
       }
