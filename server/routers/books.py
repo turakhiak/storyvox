@@ -87,7 +87,11 @@ async def list_books(db: Session = Depends(get_db)):
 @router.get("/{book_id}", response_model=BookResponse)
 async def get_book(book_id: str, db: Session = Depends(get_db)):
     """Get a single book's details."""
+    import time
+    t0 = time.time()
     book = db.query(Book).filter(Book.id == book_id).first()
+    elapsed = round((time.time() - t0) * 1000, 1)
+    logger.info(f"GET /api/books/{book_id} — db query took {elapsed}ms, found={'yes' if book else 'no'}")
     if not book:
         raise HTTPException(404, "Book not found")
     return book

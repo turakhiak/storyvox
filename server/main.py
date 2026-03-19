@@ -5,9 +5,10 @@ import os
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 
 from config import settings
 from models.database import init_db, get_db, Book
@@ -99,6 +100,20 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+@app.get("/api/health/db")
+async def health_db(db: Session = Depends(get_db)):
+    """Test database connectivity — returns timing and book count."""
+    import time
+    t0 = time.time()
+    try:
+        count = db.query(Book).count()
+        elapsed_ms = round((time.time() - t0) * 1000, 1)
+        return {"status": "ok", "book_count": count, "query_ms": elapsed_ms}
+    except Exception as e:
+        elapsed_ms = round((time.time() - t0) * 1000, 1)
+        return {"status": "error", "error": str(e)[:300], "query_ms": elapsed_ms}
 
 
 @app.get("/api/diagnostics")

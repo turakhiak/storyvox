@@ -53,27 +53,21 @@ export default function BookPage() {
   // Shows a "server is waking up" hint after 12s — matches the first retry delay
   const [warming, setWarming] = useState(false);
 
-  // Show "connecting…" hint if the book hasn't loaded after 10s (transient 503 / slow network)
+  // Show "connecting…" hint if the book hasn't loaded after 8s
   useEffect(() => {
-    const t = setTimeout(() => setWarming(true), 10_000);
+    const t = setTimeout(() => setWarming(true), 8_000);
     return () => clearTimeout(t);
   }, []);
 
   useEffect(() => {
     if (!id) return;
-
-    // Load book first — it's the critical dependency for the whole page.
-    // Chapters, characters and voices are loaded in parallel but their failures
-    // are non-fatal: the page can still render without them.
-    getBook(id)
-      .then((b) => {
-        setBook(b);
-        // Kick off the rest in parallel now that we know the book exists
-        getChapters(id).then(setChapters).catch(() => {});
-        getCharacters(id).then(setCharacters).catch(() => {});
-        getVoices().then(setVoices).catch(() => {});
-      })
-      .catch((e) => setError(e.message));
+    // All four load in parallel. Characters & voices are non-fatal.
+    Promise.all([
+      getBook(id).then(setBook),
+      getChapters(id).then(setChapters).catch(() => []),
+      getCharacters(id).then(setCharacters).catch(() => []),
+      getVoices().then(setVoices).catch(() => []),
+    ]).catch((e) => setError(e.message));
   }, [id]);
 
   const handleDetectCharacters = async () => {

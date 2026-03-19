@@ -126,10 +126,11 @@ export interface RevisionRound {
   };
 }
 
-// Delays (ms) per retry attempt — covers transient 503s from deploys / brief hiccups.
-const COLD_START_DELAYS = [5_000, 10_000, 15_000, 20_000]; // ~50s total budget
+// Retry delays (ms) — transient 503 from deploys, etc.  Keep short since
+// the starter plan does NOT cold-start; long waits just frustrate.
+const RETRY_DELAYS = [2_000, 4_000, 8_000]; // ~14s total budget (3 retries)
 
-async function request<T>(path: string, options?: RequestInit, retries = 4): Promise<T> {
+async function request<T>(path: string, options?: RequestInit, retries = 3): Promise<T> {
   // Don't send Content-Type on GET/HEAD — no body, and the header triggers a CORS preflight.
   const method = (options?.method || "GET").toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
@@ -139,44 +140,51 @@ async function request<T>(path: string, options?: RequestInit, retries = 4): Pro
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
+      const t0 = Date.now();
       const res = await fetch(`${API_URL}${path}`, {
         ...options,
         headers: { ...baseHeaders, ...options?.headers },
       });
+      const elapsed = Date.now() - t0;
 
       if (!res.ok) {
-        // 502/503/504 = server unavailable (deploy restart / transient); retry with backoff
         const isUnavailable = res.status === 503 || res.status === 502 || res.status === 504;
         const isLast = attempt === retries;
+        console.warn(`[StoryVox] ${method} ${path} → ${res.status} (${elapsed}ms, attempt ${attempt + 1}/${retries + 1})`);
         if (isUnavailable && !isLast) {
-          await new Promise(r => setTimeout(r, COLD_START_DELAYS[attempt] ?? 15_000));
+          await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt] ?? 8_000));
           continue;
         }
-        const error = await res.json().catch(() => ({ detail: res.statusText }));
+        const body = await res.text().catch(() => "");
+        let detail: string;
+        try { detail = JSON.parse(body).detail; } catch { detail = ""; }
         if (isUnavailable) {
-          throw new Error(`Server unavailable (${res.status}) — please try again in a moment.`);
+          throw new Error(`Server returned ${res.status} for ${method} ${path}. Response: ${body.slice(0, 200)}`);
         }
-        throw new Error(error.detail || `API error ${res.status}`);
+        throw new Error(detail || `API error ${res.status}: ${body.slice(0, 200)}`);
       }
 
+      if (attempt > 0) {
+        console.info(`[StoryVox] ${method} ${path} → ${res.status} OK after ${attempt + 1} attempts (${elapsed}ms)`);
+      }
       return res.json();
     } catch (e: any) {
-      // TypeError: Failed to fetch = network-level failure (CORS, DNS, no connection)
       const isNetworkError = e instanceof TypeError && (
         e.message.includes("fetch") || e.message.includes("network") || e.message.includes("Network")
       );
       const isLast = attempt === retries;
       if (isNetworkError && !isLast) {
-        await new Promise(r => setTimeout(r, COLD_START_DELAYS[attempt] ?? 10_000));
+        console.warn(`[StoryVox] ${method} ${path} → NETWORK ERROR: ${e.message} (attempt ${attempt + 1}/${retries + 1})`);
+        await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt] ?? 8_000));
         continue;
       }
       if (isNetworkError) {
-        throw new Error("Could not reach the server — check your connection or try again shortly.");
+        throw new Error(`Network error on ${method} ${path}: ${e.message}`);
       }
       throw e;
     }
   }
-  throw new Error("Request failed after retries");
+  throw new Error(`Request failed after ${retries + 1} attempts: ${method} ${path}`);
 }
 
 // === Books ===
@@ -185,7 +193,7 @@ export async function uploadBook(file: File): Promise<Book> {
   const formData = new FormData();
   formData.append("file", file);
 
-  for (let attempt = 0; attempt <= 4; attempt++) {
+  for (let attempt = 0; attempt <= 3; attempt++) {
     const res = await fetch(`${API_URL}/api/books`, {
       method: "POST",
       body: formData,
@@ -193,8 +201,9 @@ export async function uploadBook(file: File): Promise<Book> {
 
     if (!res.ok) {
       const isUnavailable = res.status === 503 || res.status === 502 || res.status === 504;
-      if (isUnavailable && attempt < 4) {
-        await new Promise(r => setTimeout(r, COLD_START_DELAYS[attempt] ?? 15_000));
+      if (isUnavailable && attempt < 3) {
+        console.warn(`[StoryVox] POST /api/books → ${res.status} (attempt ${attempt + 1}/4)`);
+        await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt] ?? 8_000));
         continue;
       }
       const error = await res.json().catch(() => ({ detail: res.statusText }));
