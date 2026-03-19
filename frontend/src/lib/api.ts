@@ -126,20 +126,26 @@ export interface RevisionRound {
   };
 }
 
-// Delays (ms) per retry attempt for cold-start recovery.
-// Render free tier can take up to 60-90s to wake up; space retries to cover the full window.
-const COLD_START_DELAYS = [8_000, 12_000, 20_000, 30_000]; // ~70s total budget
+// Delays (ms) per retry attempt — covers transient 503s from deploys / brief hiccups.
+const COLD_START_DELAYS = [5_000, 10_000, 15_000, 20_000]; // ~50s total budget
 
 async function request<T>(path: string, options?: RequestInit, retries = 4): Promise<T> {
+  // Don't send Content-Type on GET/HEAD — no body, and the header triggers a CORS preflight.
+  const method = (options?.method || "GET").toUpperCase();
+  const hasBody = method !== "GET" && method !== "HEAD";
+  const baseHeaders: Record<string, string> = hasBody
+    ? { "Content-Type": "application/json" }
+    : {};
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(`${API_URL}${path}`, {
-        headers: { "Content-Type": "application/json", ...options?.headers },
         ...options,
+        headers: { ...baseHeaders, ...options?.headers },
       });
 
       if (!res.ok) {
-        // 502/503/504 = server unavailable (cold start or transient); retry with backoff
+        // 502/503/504 = server unavailable (deploy restart / transient); retry with backoff
         const isUnavailable = res.status === 503 || res.status === 502 || res.status === 504;
         const isLast = attempt === retries;
         if (isUnavailable && !isLast) {
@@ -148,22 +154,24 @@ async function request<T>(path: string, options?: RequestInit, retries = 4): Pro
         }
         const error = await res.json().catch(() => ({ detail: res.statusText }));
         if (isUnavailable) {
-          throw new Error("Could not reach the server. It may be starting up — please try again in a moment.");
+          throw new Error(`Server unavailable (${res.status}) — please try again in a moment.`);
         }
-        throw new Error(error.detail || `API error: ${res.status}`);
+        throw new Error(error.detail || `API error ${res.status}`);
       }
 
       return res.json();
     } catch (e: any) {
-      const isNetworkError = e instanceof TypeError && e.message.includes("fetch");
+      // TypeError: Failed to fetch = network-level failure (CORS, DNS, no connection)
+      const isNetworkError = e instanceof TypeError && (
+        e.message.includes("fetch") || e.message.includes("network") || e.message.includes("Network")
+      );
       const isLast = attempt === retries;
       if (isNetworkError && !isLast) {
-        // True network failure (e.g. DNS not yet resolving) — also retry
         await new Promise(r => setTimeout(r, COLD_START_DELAYS[attempt] ?? 10_000));
         continue;
       }
       if (isNetworkError) {
-        throw new Error("Could not reach the server. It may be starting up — please try again in a moment.");
+        throw new Error("Could not reach the server — check your connection or try again shortly.");
       }
       throw e;
     }

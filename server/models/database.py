@@ -178,6 +178,8 @@ def _migrate_add_columns():
         # revision_rounds
         ("revision_rounds", "weighted_avg", "FLOAT", "REAL", ""),
         ("revision_rounds", "is_best",      "BOOLEAN", "INTEGER", "DEFAULT 0"),
+        # characters
+        ("characters", "voice_id", "VARCHAR", "VARCHAR", ""),
     ]
 
     try:
