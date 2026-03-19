@@ -795,27 +795,15 @@ function ProductionTab({
   );
 }
 
-// Helper: pick a sensible default voice for a character based on their traits
+// Helper: fallback voice for characters that pre-date auto-assignment.
+// The backend now calls _assign_distinct_voices() on detect, so this
+// only fires for books imported before that change.
 function getDefaultVoice(char: Character): string {
   const gender = (char.gender || "").toLowerCase();
   const age = (char.age_range || "").toLowerCase();
-  const personality = (char.personality || []).map((p) => p.toLowerCase());
-
-  if (age === "child") return "en-US-AnaNeural";
-
-  const isGb = personality.some((p) => ["proper", "formal", "stoic", "royal"].includes(p));
-  const isAu = personality.some((p) => ["rough", "wild", "friendly", "outdoorsy"].includes(p));
-  const accent = isGb ? "gb" : isAu ? "au" : "us";
-
-  const map: Record<string, string> = {
-    "male_gb": "en-GB-ThomasNeural",
-    "male_us": "en-US-GuyNeural",
-    "male_au": "en-AU-WilliamNeural",
-    "female_gb": "en-GB-SoniaNeural",
-    "female_us": "en-US-AvaNeural",
-    "female_au": "en-AU-NatashaNeural",
-  };
-  return map[`${gender}_${accent}`] || "en-GB-RyanNeural";
+  if (age.includes("child")) return "en-US-AnaNeural";
+  if (gender === "female")   return "en-GB-SoniaNeural"; // top of _FEMALE_ORDER
+  return "en-US-GuyNeural";                              // top of _MALE_ORDER (≠ narrator)
 }
 
 function VoiceCastingTab({
