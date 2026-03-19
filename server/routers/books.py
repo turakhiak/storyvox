@@ -7,10 +7,12 @@ import shutil
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from models.database import get_db, Book, Chapter
+from models.database import get_db, Book, Chapter, Screenplay, ScreenplaySegment
 from models.schemas import BookResponse, ChapterListResponse
 from services.epub.parser import parse_epub, save_cover
 from config import settings
+
+logger = __import__("logging").getLogger(__name__)
 
 router = APIRouter(prefix="/api/books", tags=["books"])
 
@@ -137,16 +139,54 @@ async def update_bookmark(book_id: str, chapter_num: int = Query(...), db: Sessi
 
 @router.delete("/{book_id}")
 async def delete_book(book_id: str, db: Session = Depends(get_db)):
-    """Delete a book and all associated data."""
+    """Delete a book and ALL associated data — epub, cover, audio, screenplays, characters."""
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
         raise HTTPException(404, "Book not found")
 
-    # Clean up files
-    if book.epub_path and os.path.exists(book.epub_path):
-        os.remove(book.epub_path)
+    files_deleted = 0
+    files_missing = 0
 
+    def _rm(path: str):
+        nonlocal files_deleted, files_missing
+        if not path:
+            return
+        # audio_url values are URL paths like /static/audio/filename.mp3
+        # convert to filesystem path
+        if path.startswith("/static/audio/"):
+            path = os.path.join(settings.upload_dir, "audio", os.path.basename(path))
+        elif path.startswith("/static/covers/"):
+            path = os.path.join(settings.upload_dir, "covers", os.path.basename(path))
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                files_deleted += 1
+            else:
+                files_missing += 1
+        except Exception as e:
+            logger.warning(f"Could not delete file {path}: {e}")
+
+    # Delete epub
+    _rm(book.epub_path)
+
+    # Delete cover image
+    if book.cover_url:
+        _rm(book.cover_url)
+
+    # Delete all audio files for every segment of every screenplay of every chapter
+    chapters = db.query(Chapter).filter(Chapter.book_id == book_id).all()
+    for chapter in chapters:
+        screenplays = db.query(Screenplay).filter(Screenplay.chapter_id == chapter.id).all()
+        for screenplay in screenplays:
+            segments = db.query(ScreenplaySegment).filter(ScreenplaySegment.screenplay_id == screenplay.id).all()
+            for seg in segments:
+                if seg.audio_url:
+                    _rm(seg.audio_url)
+
+    logger.info(f"Book {book_id} delete: removed {files_deleted} files ({files_missing} already missing)")
+
+    # DB delete cascades: book → chapters → screenplays → segments/revision_rounds + characters
     db.delete(book)
     db.commit()
 
-    return {"status": "deleted"}
+    return {"status": "deleted", "files_removed": files_deleted}
