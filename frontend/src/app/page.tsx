@@ -7,7 +7,7 @@ import {
   Mic, ChevronRight, Sparkles, Radio, Volume2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getBooks, uploadBook, deleteBook, getCoverUrl, formatWordCount, formatDuration } from "@/lib/api";
+import { getBooks, uploadBook, deleteBook, getCoverUrl, formatWordCount, formatDuration, pingServer } from "@/lib/api";
 import type { Book } from "@/lib/api";
 import { useLibraryStore } from "@/store/library";
 
@@ -20,6 +20,8 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Ping the server on load so Render wakes up before the user tries to do anything
+    pingServer().catch(() => {});
     getBooks()
       .then(setBooks)
       .catch((e) => console.error("Failed to load books:", e));

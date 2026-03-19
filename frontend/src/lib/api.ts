@@ -4,6 +4,16 @@
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/** Wake up Render's free-tier server (it sleeps after 15 min of inactivity). */
+export async function pingServer(): Promise<boolean> {
+  try {
+    await fetch(`${API_URL}/api/books`, { method: "GET" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -116,18 +126,35 @@ export interface RevisionRound {
   };
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    ...options,
-  });
+async function request<T>(path: string, options?: RequestInit, retries = 2): Promise<T> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(`${API_URL}${path}`, {
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        ...options,
+      });
 
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(error.detail || `API error: ${res.status}`);
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(error.detail || `API error: ${res.status}`);
+      }
+
+      return res.json();
+    } catch (e: any) {
+      const isNetworkError = e instanceof TypeError && e.message.includes("fetch");
+      const isLast = attempt === retries;
+      if (isNetworkError && !isLast) {
+        // Server may be cold-starting — wait and retry
+        await new Promise(r => setTimeout(r, 4000 * (attempt + 1)));
+        continue;
+      }
+      if (isNetworkError) {
+        throw new Error("Could not reach the server. It may be starting up — please try again in a moment.");
+      }
+      throw e;
+    }
   }
-
-  return res.json();
+  throw new Error("Request failed after retries");
 }
 
 // === Books ===
