@@ -50,6 +50,13 @@ export default function BookPage() {
   const [activeTab, setActiveTab] = useState<Tab>("chapters");
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Shows a "server is waking up" hint after 12s — matches the first retry delay
+  const [warming, setWarming] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => setWarming(true), 12_000);
+    return () => clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -76,10 +83,28 @@ export default function BookPage() {
     }
   };
 
+  // Show loading/error state before book data arrives
   if (!book) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="w-8 h-8 text-amber-warm animate-spin" />
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+        {error ? (
+          <>
+            <AlertCircle className="w-8 h-8 text-stage-red" />
+            <p className="text-stage-red font-ui text-sm text-center max-w-sm px-6">{error}</p>
+            <button onClick={() => router.push("/")} className="btn-ghost text-sm flex items-center gap-2">
+              <ArrowLeft className="w-4 h-4" /> Back to Library
+            </button>
+          </>
+        ) : (
+          <>
+            <Loader2 className="w-8 h-8 text-amber-warm animate-spin" />
+            {warming && (
+              <p className="text-ink-500 font-ui text-sm text-center max-w-xs px-6">
+                Server is starting up — this can take up to 60 seconds on first load…
+              </p>
+            )}
+          </>
+        )}
       </div>
     );
   }

@@ -126,7 +126,11 @@ export interface RevisionRound {
   };
 }
 
-async function request<T>(path: string, options?: RequestInit, retries = 2): Promise<T> {
+// Delays (ms) per retry attempt for cold-start recovery.
+// Render free tier takes 30-60s to wake up, so space retries across that window.
+const COLD_START_DELAYS = [10_000, 15_000, 20_000]; // ~45s total budget
+
+async function request<T>(path: string, options?: RequestInit, retries = 3): Promise<T> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(`${API_URL}${path}`, {
@@ -135,7 +139,17 @@ async function request<T>(path: string, options?: RequestInit, retries = 2): Pro
       });
 
       if (!res.ok) {
+        // 502/503/504 = server unavailable (cold start or transient); retry with backoff
+        const isUnavailable = res.status === 503 || res.status === 502 || res.status === 504;
+        const isLast = attempt === retries;
+        if (isUnavailable && !isLast) {
+          await new Promise(r => setTimeout(r, COLD_START_DELAYS[attempt] ?? 15_000));
+          continue;
+        }
         const error = await res.json().catch(() => ({ detail: res.statusText }));
+        if (isUnavailable) {
+          throw new Error("Could not reach the server. It may be starting up — please try again in a moment.");
+        }
         throw new Error(error.detail || `API error: ${res.status}`);
       }
 
@@ -144,8 +158,8 @@ async function request<T>(path: string, options?: RequestInit, retries = 2): Pro
       const isNetworkError = e instanceof TypeError && e.message.includes("fetch");
       const isLast = attempt === retries;
       if (isNetworkError && !isLast) {
-        // Server may be cold-starting — wait and retry
-        await new Promise(r => setTimeout(r, 4000 * (attempt + 1)));
+        // True network failure (e.g. DNS not yet resolving) — also retry
+        await new Promise(r => setTimeout(r, COLD_START_DELAYS[attempt] ?? 10_000));
         continue;
       }
       if (isNetworkError) {
@@ -163,17 +177,26 @@ export async function uploadBook(file: File): Promise<Book> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch(`${API_URL}/api/books`, {
-    method: "POST",
-    body: formData,
-  });
+  for (let attempt = 0; attempt <= 3; attempt++) {
+    const res = await fetch(`${API_URL}/api/books`, {
+      method: "POST",
+      body: formData,
+    });
 
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(error.detail || "Upload failed");
+    if (!res.ok) {
+      const isUnavailable = res.status === 503 || res.status === 502 || res.status === 504;
+      if (isUnavailable && attempt < 3) {
+        await new Promise(r => setTimeout(r, COLD_START_DELAYS[attempt] ?? 15_000));
+        continue;
+      }
+      const error = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(error.detail || "Upload failed");
+    }
+
+    return res.json();
   }
 
-  return res.json();
+  throw new Error("Upload failed after retries");
 }
 
 export async function getBooks(): Promise<Book[]> {
