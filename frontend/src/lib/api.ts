@@ -297,6 +297,10 @@ export async function stopBatch(bookId: string): Promise<void> {
   await request(`/api/books/${bookId}/batch/stop`, { method: "POST" });
 }
 
+export async function resetBatch(bookId: string): Promise<void> {
+  await request(`/api/books/${bookId}/batch/reset`, { method: "POST" });
+}
+
 export async function updateBookmark(bookId: string, chapterNum: number): Promise<void> {
   await request(`/api/books/${bookId}/bookmark?chapter_num=${chapterNum}`, { method: "PATCH" });
 }

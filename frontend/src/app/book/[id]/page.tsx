@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import {
   getBook, getChapters, getCharacters, detectCharacters,
   updateCharacterVoice, getVoices, getBatchStatus, batchGenerate,
-  stopBatch, updateBookmark, getScreenplay, getRevisions,
+  stopBatch, resetBatch, updateBookmark, getScreenplay, getRevisions,
   getCoverUrl, formatWordCount, formatDuration,
 } from "@/lib/api";
 import type { Book, Chapter, Character, Voice, BatchStatus, ChapterStatus, Screenplay, RevisionRound, ScreenplaySegment } from "@/lib/api";
@@ -457,6 +457,21 @@ function ProductionTab({
     }
   };
 
+  const handleReset = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await resetBatch(bookId);
+      const updated = await getBook(bookId);
+      onBookUpdate(updated);
+      await fetchStatus();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleBookmarkUpdate = async (chapterNum: number) => {
     try {
       await updateBookmark(bookId, chapterNum);
@@ -494,12 +509,27 @@ function ProductionTab({
       {error && (
         <div className="bg-stage-red/10 border border-stage-red/20 rounded-xl px-4 py-3 flex items-start gap-2">
           <AlertCircle className="w-4 h-4 text-stage-red flex-shrink-0 mt-0.5" />
-          <div>
+          <div className="flex-1">
             <span className="text-stage-red text-sm font-ui block">{error}</span>
             {(error.includes("quota") || error.includes("rate") || error.includes("429")) && (
               <span className="text-stage-red/70 text-xs font-ui mt-1 block">
                 Tip: Groq has a 100k token/day free limit. If hit, wait until midnight UTC (~5:30 AM IST) or the app will auto-use Gemini/Ollama as fallback.
               </span>
+            )}
+            {error.includes("already processing") && (
+              <div className="mt-2">
+                <span className="text-stage-red/70 text-xs font-ui block mb-2">
+                  The server may have restarted and left a stale lock. Click Reset to clear it, then try generating again.
+                </span>
+                <button
+                  onClick={handleReset}
+                  disabled={loading}
+                  className="btn-ghost text-stage-red border-stage-red/40 text-xs flex items-center gap-1.5 py-1 px-3"
+                >
+                  {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  Reset stuck batch
+                </button>
+              </div>
             )}
           </div>
         </div>

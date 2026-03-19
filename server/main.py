@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from models.database import init_db
+from models.database import init_db, get_db, Book
 from routers import books, characters, screenplay, batch
 from routers.characters import voices_router
 
@@ -24,6 +24,24 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
     init_db()
     logger.info("Database ready.")
+
+    # Reset any batches that were stuck in "processing" state when the server
+    # last shut down or crashed.  No background tasks survive a restart, so
+    # any "processing" record is definitionally stale.
+    try:
+        db = next(get_db())
+        stuck = db.query(Book).filter(Book.batch_status == "processing").all()
+        if stuck:
+            logger.warning(
+                f"Found {len(stuck)} book(s) with stuck batch_status='processing' — resetting to 'idle'"
+            )
+            for book in stuck:
+                book.batch_status = "idle"
+            db.commit()
+        db.close()
+    except Exception as e:
+        logger.error(f"Could not reset stuck batches on startup: {e}")
+
     yield
     logger.info("Shutting down.")
 

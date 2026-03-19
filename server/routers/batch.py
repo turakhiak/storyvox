@@ -388,3 +388,29 @@ async def stop_batch(
     book.batch_status = "paused"
     db.commit()
     return {"status": "stopping", "message": "Batch will stop after current chapter completes"}
+
+
+@router.post("/reset")
+async def reset_batch(
+    book_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Force-reset a stuck batch back to 'idle'.
+
+    Use this when a previous generate request failed mid-way (e.g. a server
+    cold-start timeout) and left batch_status stuck on 'processing'.
+    Safe to call at any time — it does NOT cancel an actively-running batch
+    (the background task will overwrite this back to 'idle' when it finishes),
+    but if no task is running the status will be cleared immediately.
+    """
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(404, "Book not found")
+
+    prev_status = book.batch_status
+    book.batch_status = "idle"
+    book.batch_progress = None
+    db.commit()
+    logger.info(f"Batch reset for book {book_id}: '{prev_status}' → 'idle'")
+    return {"status": "idle", "message": "Batch status reset — you can now start a new batch"}
