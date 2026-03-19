@@ -97,3 +97,44 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+@app.get("/api/diagnostics")
+async def diagnostics():
+    """Quick check of LLM provider availability — useful for debugging on Render."""
+    providers = {}
+    try:
+        if settings.gemini_api_key:
+            providers["gemini"] = {
+                "configured": True,
+                "model": settings.gemini_model,
+                "model_quality": settings.gemini_model_quality,
+            }
+        else:
+            providers["gemini"] = {"configured": False}
+    except Exception as e:
+        providers["gemini"] = {"configured": False, "error": str(e)[:100]}
+
+    try:
+        if settings.groq_api_key:
+            providers["groq"] = {"configured": True, "model": settings.groq_model}
+        else:
+            providers["groq"] = {"configured": False}
+    except Exception as e:
+        providers["groq"] = {"configured": False, "error": str(e)[:100]}
+
+    providers["ollama"] = {
+        "configured": True,
+        "note": "local only — not available on Render",
+        "model": settings.ollama_model,
+    }
+
+    db_type = "postgresql" if ("postgresql" in settings.database_url or "postgres" in settings.database_url) else "sqlite"
+
+    return {
+        "status": "ok",
+        "providers": providers,
+        "database": db_type,
+        "frontend_url": settings.frontend_url,
+        "batch_size": settings.batch_size,
+    }

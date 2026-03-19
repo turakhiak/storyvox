@@ -291,9 +291,10 @@ async def batch_generate(
         )
         if not existing or existing.status != "complete":
             chapter_ids_to_process.append(ch.id)
-        else:
-            # Already done — still include in the "batch" view but won't re-process
-            chapter_ids_to_process.append(ch.id)
+        # else: skip — chapter already has a complete screenplay
+
+    if not chapter_ids_to_process:
+        raise HTTPException(200, "All selected chapters already have complete screenplays")
 
     # Update book status
     book.batch_status = "processing"

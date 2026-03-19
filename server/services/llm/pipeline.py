@@ -108,7 +108,8 @@ class ScreenplayPipeline:
 
         logger.info(
             f"Pipeline: {len(chunks)} chunk(s), mode={mode}, chunk_size={self._get_chunk_size()}, "
-            f"{'LOCAL fast-path (Writer only)' if is_local else 'CLOUD Writer+Director loop'}"
+            f"{'LOCAL fast-path (Writer only)' if is_local else 'CLOUD Writer+Director loop'}, "
+            f"writer={type(self.writer).__name__}, director={type(self.director).__name__}"
         )
 
         if is_local:
@@ -263,14 +264,16 @@ class ScreenplayPipeline:
                     )
 
                 try:
+                    logger.info(f"  Writer call: chunk={chunk_idx} round={round_num} prompt_len={len(prompt)}")
                     result = await self.writer.generate_json(
                         WRITER_SYSTEM_PROMPT,
                         prompt,
                         temperature=0.7 if round_num == 1 else 0.5,
                         response_schema=ScreenplayDraft,
                     )
+                    logger.info(f"  Writer returned: type={type(result).__name__}, keys={list(result.keys()) if isinstance(result, dict) else 'list'}")
                 except Exception as e:
-                    logger.error(f"Writer failed chunk {chunk_idx} round {round_num}: {e}")
+                    logger.error(f"Writer failed chunk {chunk_idx} round {round_num}: {type(e).__name__}: {e}")
                     break
 
                 if isinstance(result, dict):
@@ -366,12 +369,15 @@ class ScreenplayPipeline:
         try:
             from .schemas import SoundPlan
             logger.info("Running Sound Designer…")
+            # Truncate to ~first 60 segments to stay within token limits
+            # but never break mid-JSON
+            segments_for_sound = all_segments[:60]
             sound_prompt = SOUND_DESIGNER_PROMPT.format(
-                screenplay=json.dumps(all_segments)[:10000],
+                screenplay=json.dumps(segments_for_sound),
                 chapter_text="",
             )
             sound_plan = await self.director.generate_json(
-                "",
+                "You are a professional Sound Designer for radio play productions.",
                 sound_prompt,
                 temperature=0.3,
                 response_schema=SoundPlan,

@@ -143,7 +143,7 @@ class GeminiClient:
         for attempt in range(max_retries):
             try:
                 config = genai_types.GenerateContentConfig(**gen_config_kwargs)
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(
                     None,
                     lambda: self.client.models.generate_content(
@@ -233,7 +233,7 @@ class GroqClient:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 completion = await loop.run_in_executor(
                     None,
                     lambda: self.client.chat.completions.create(
