@@ -1,6 +1,22 @@
-from pydantic import BaseModel
+import json
+from pydantic import BaseModel, field_validator
 from typing import Optional, Union, Any
 from datetime import datetime
+
+
+def _parse_json_field(v):
+    """Parse a JSON string into a dict — handles TEXT columns that should be JSONB."""
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+            return parsed if isinstance(parsed, dict) else None
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
 
 
 class BookResponse(BaseModel):
@@ -17,6 +33,11 @@ class BookResponse(BaseModel):
     batch_status: str = "idle"
     batch_progress: Optional[dict] = None
     created_at: Optional[datetime] = None
+
+    @field_validator("batch_progress", mode="before")
+    @classmethod
+    def parse_batch_progress(cls, v):
+        return _parse_json_field(v)
 
     class Config:
         from_attributes = True
@@ -89,6 +110,11 @@ class ScreenplayResponse(BaseModel):
     weighted_avg: Optional[float] = None
     segments: list[ScreenplaySegmentResponse] = []
 
+    @field_validator("final_scores", mode="before")
+    @classmethod
+    def parse_final_scores(cls, v):
+        return _parse_json_field(v)
+
     class Config:
         from_attributes = True
 
@@ -101,6 +127,12 @@ class RevisionRoundResponse(BaseModel):
     approved: bool
     is_best: bool
     critique: dict
+
+    @field_validator("scores", "critique", mode="before")
+    @classmethod
+    def parse_json_fields(cls, v):
+        result = _parse_json_field(v)
+        return result if result is not None else {}
 
     class Config:
         from_attributes = True

@@ -165,12 +165,12 @@ def _migrate_add_columns():
         # books
         ("books", "listen_bookmark",  "INTEGER",         "INTEGER",  "DEFAULT 0"),
         ("books", "batch_status",     "VARCHAR",         "VARCHAR",  "DEFAULT 'idle'"),
-        ("books", "batch_progress",   "TEXT",            "TEXT",     ""),
+        ("books", "batch_progress",   "JSONB",           "TEXT",     ""),
         # screenplays
         ("screenplays", "audio_status",  "VARCHAR",      "VARCHAR",  "DEFAULT 'none'"),
-        ("screenplays", "final_scores",  "TEXT",         "TEXT",     ""),
+        ("screenplays", "final_scores",  "JSONB",        "TEXT",     ""),
         ("screenplays", "weighted_avg",  "FLOAT",        "REAL",     ""),
-        ("screenplays", "sound_plan",    "TEXT",         "TEXT",     ""),
+        ("screenplays", "sound_plan",    "JSONB",        "TEXT",     ""),
         # screenplay_segments
         ("screenplay_segments", "audio_url",    "VARCHAR", "VARCHAR", ""),
         ("screenplay_segments", "duration_ms",  "INTEGER", "INTEGER", ""),
@@ -180,6 +180,14 @@ def _migrate_add_columns():
         ("revision_rounds", "is_best",      "BOOLEAN", "INTEGER", "DEFAULT 0"),
         # characters
         ("characters", "voice_id", "VARCHAR", "VARCHAR", ""),
+    ]
+
+    # Columns that were previously added as TEXT but should be JSONB on PostgreSQL.
+    # ALTER COLUMN ... TYPE JSONB USING handles the conversion of existing data.
+    TYPE_FIXES = [
+        ("books", "batch_progress", "JSONB"),
+        ("screenplays", "final_scores", "JSONB"),
+        ("screenplays", "sound_plan", "JSONB"),
     ]
 
     try:
@@ -197,6 +205,30 @@ def _migrate_add_columns():
                 except Exception as col_err:
                     conn.rollback()
                     logger.debug(f"Migration (pg) skipped {table}.{col}: {col_err}")
+
+            # Fix columns that were added as TEXT but should be JSONB
+            for table, col, target_type in TYPE_FIXES:
+                try:
+                    # Check current column type
+                    cursor.execute(
+                        "SELECT data_type FROM information_schema.columns "
+                        "WHERE table_name = %s AND column_name = %s",
+                        (table, col),
+                    )
+                    row = cursor.fetchone()
+                    if row and row[0] == "text":
+                        sql = (
+                            f"ALTER TABLE {table} ALTER COLUMN {col} "
+                            f"TYPE {target_type} USING {col}::{target_type}"
+                        )
+                        cursor.execute(sql)
+                        conn.commit()
+                        logger.info(f"Migration (pg): converted {table}.{col} from TEXT → {target_type}")
+                    else:
+                        logger.debug(f"Migration (pg): {table}.{col} already correct type ({row})")
+                except Exception as fix_err:
+                    conn.rollback()
+                    logger.warning(f"Migration (pg): could not fix {table}.{col} type: {fix_err}")
         else:
             # SQLite: check PRAGMA table_info before each ALTER
             for table, col, _, sqlite_type, default in MIGRATIONS:
