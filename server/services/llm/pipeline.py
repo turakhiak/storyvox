@@ -451,6 +451,8 @@ class ScreenplayPipeline:
 
         # Normalize scores sub-dict
         scores = critique.get("scores", {})
+        if not isinstance(scores, dict):
+            scores = {}
         if isinstance(scores, dict):
             # faithfulness_to_source → faithfulness
             if "faithfulness_to_source" in scores and "faithfulness" not in scores:
@@ -542,10 +544,16 @@ class ScreenplayPipeline:
 
     def _format_revision_items(self, critique: dict) -> str:
         notes = critique.get("revision_notes", [])
+        if not isinstance(notes, list):
+            notes = []
         items = []
         for i, note in enumerate(notes, 1):
-            severity = note.get("severity", "minor")
-            segments = note.get("segments", [])
-            text = note.get("note", "")
-            items.append(f"{i}. [{severity.upper()}] Segments {segments}: {text}")
+            if isinstance(note, str):
+                # Groq sometimes returns revision_notes as a list of plain strings
+                items.append(f"{i}. [MINOR] {note}")
+            elif isinstance(note, dict):
+                severity = note.get("severity", "minor")
+                segments = note.get("segments", [])
+                text = note.get("note", "")
+                items.append(f"{i}. [{severity.upper()}] Segments {segments}: {text}")
         return "\n".join(items) if items else "No specific notes."
