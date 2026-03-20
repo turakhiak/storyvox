@@ -95,7 +95,7 @@ async def background_batch_process(
                 "total_in_batch": len(chapter_ids),
                 "completed": completed,
                 "failed": failed,
-                "started_at": book.batch_progress.get("started_at", time.time()) if book.batch_progress else time.time(),
+                "started_at": book.batch_progress.get("started_at", time.time()) if isinstance(book.batch_progress, dict) else time.time(),
             }
             db.commit()
 
@@ -283,7 +283,7 @@ async def batch_generate(
 
     if book.batch_status == "processing":
         # Auto-reset if the batch appears stale (no progress for > STALE_BATCH_MINUTES)
-        progress = book.batch_progress or {}
+        progress = book.batch_progress if isinstance(book.batch_progress, dict) else {}
         started_at = progress.get("started_at", 0)
         age_minutes = (time.time() - started_at) / 60 if started_at else 999
 
@@ -403,7 +403,7 @@ async def batch_status(
         })
 
     # Include staleness info so UI can warn the user
-    progress = book.batch_progress or {}
+    progress = book.batch_progress if isinstance(book.batch_progress, dict) else {}
     started_at = progress.get("started_at", 0)
     batch_age_minutes = round((time.time() - started_at) / 60, 1) if started_at else None
 

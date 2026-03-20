@@ -23,6 +23,37 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Gemini schema helper — strip default values that Gemini API rejects
+# ---------------------------------------------------------------------------
+
+def _strip_schema_defaults(schema):
+    """
+    Recursively remove 'default' keys from a JSON schema dict.
+    Gemini API rejects response schemas that contain default values.
+    Accepts either a Pydantic model class or a dict.
+    """
+    if hasattr(schema, "model_json_schema"):
+        schema = schema.model_json_schema()
+    if not isinstance(schema, dict):
+        return schema
+
+    cleaned = {}
+    for key, value in schema.items():
+        if key == "default":
+            continue  # Strip default values
+        if isinstance(value, dict):
+            cleaned[key] = _strip_schema_defaults(value)
+        elif isinstance(value, list):
+            cleaned[key] = [
+                _strip_schema_defaults(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
 # Typed exceptions — let CompositeLLMClient set appropriate cooldowns
 # ---------------------------------------------------------------------------
 
@@ -134,7 +165,7 @@ class GeminiClient:
         }
         if response_schema:
             gen_config_kwargs["response_mime_type"] = "application/json"
-            gen_config_kwargs["response_schema"] = response_schema
+            gen_config_kwargs["response_schema"] = _strip_schema_defaults(response_schema)
         if system:
             gen_config_kwargs["system_instruction"] = system
 
