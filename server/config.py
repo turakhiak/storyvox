@@ -7,6 +7,11 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite:///./storyvox.db"
 
+    # Azure Speech TTS (optional — free tier: 500K chars/month, no credit card needed)
+    # Create resource at: portal.azure.com → Create Speech resource → F0 (free) tier
+    azure_speech_key: Optional[str] = None
+    azure_speech_region: str = "eastus"
+
     # LLM Keys & Models
     gemini_api_key: Optional[str] = None
     # ALL 1.x and 2.0 models RETIRED as of March 3, 2026 (404 errors)

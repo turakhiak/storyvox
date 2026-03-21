@@ -50,7 +50,7 @@ class AudioRenderAgent:
         # if screenplay.sound_plan:
         #    await self._process_sound_plan(screenplay.sound_plan, screenplay_id)
 
-        semaphore = asyncio.Semaphore(3)  # Low concurrency — Microsoft blocks edge-tts if hit too fast
+        semaphore = asyncio.Semaphore(5)  # Moderate concurrency for gTTS/Azure REST (no WebSocket limits)
 
         async def render_segment(seg: ScreenplaySegment):
             if seg.audio_url and not force:
