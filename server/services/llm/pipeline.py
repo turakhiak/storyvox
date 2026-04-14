@@ -15,7 +15,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Awaitable
 
-from .gemini_client import GeminiClient, LLMClient
+from .gemini_client import GeminiClient, LLMClient, ProviderError
 from .prompts import (
     WRITER_SYSTEM_PROMPT, WRITER_R1_PROMPT, WRITER_REVISION_PROMPT,
     WRITER_LOCAL_PROMPT,
@@ -353,6 +353,7 @@ class ScreenplayPipeline:
                         previous_notes_section=previous_notes_section,
                     )
 
+                director_hard_failed = False
                 try:
                     critique = await self.director.generate_json(
                         director_system,
@@ -364,6 +365,10 @@ class ScreenplayPipeline:
                 except Exception as e:
                     logger.error(f"Director failed chunk {chunk_idx} round {round_num}: {e}")
                     critique = {"scores": {k: 5 for k in weights}, "revision_notes": []}
+                    # ProviderError (includes timeout) — further rounds will only grow the
+                    # prompt and hit the same wall. Save this draft and stop.
+                    if isinstance(e, ProviderError):
+                        director_hard_failed = True
 
                 scores = critique.get("scores", {})
                 weighted_avg = self._calc_weighted_avg(scores, weights)
@@ -380,6 +385,9 @@ class ScreenplayPipeline:
                 if weighted_avg >= chunk_best_avg:
                     chunk_best_avg = weighted_avg
                     chunk_best_round = round_result
+
+                if director_hard_failed:
+                    break
 
                 previous_critique = critique
                 previous_draft = screenplay

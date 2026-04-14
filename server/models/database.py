@@ -195,6 +195,16 @@ def _migrate_add_columns():
         cursor = conn.cursor()
 
         if is_postgres:
+            # Set a short lock timeout so ALTER TABLE statements never block startup
+            # during rolling deploys (old instance still running with active transactions).
+            # If the lock can't be acquired within 3s, the migration is skipped — the
+            # column already exists from the previous deploy, so this is safe to skip.
+            try:
+                cursor.execute("SET lock_timeout = '3s'")
+                conn.commit()
+            except Exception:
+                pass  # Non-critical; carry on without the timeout
+
             # PostgreSQL: ADD COLUMN IF NOT EXISTS is safe to run repeatedly
             for table, col, pg_type, _, default in MIGRATIONS:
                 sql = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {pg_type} {default}".strip()
