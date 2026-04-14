@@ -19,16 +19,12 @@ class Settings(BaseSettings):
     # gemini-2.5-flash:      10 RPM,   250 req/day free — higher quality for creative writing
     gemini_model: str = "gemini-2.5-flash-lite"      # Simple tasks: character detection, general
     gemini_model_quality: str = "gemini-2.5-flash"   # Creative tasks: screenplay writer/director
-    groq_api_key: Optional[str] = None
-    groq_model: str = "llama-3.3-70b-versatile"
-    primary_provider: str = "gemini" # gemini | groq
-    use_fallback: bool = True
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2:3b"
     ollama_num_ctx: int = 32768  # Raised from 4096 — pipeline needs ~10k+ tokens per chunk
 
     # Screenplay chunk sizes — cloud models support much larger context windows
-    screenplay_chunk_size_cloud: int = 30000  # ~7500 words per chunk for Gemini/Groq
+    screenplay_chunk_size_cloud: int = 30000  # ~7500 words per chunk for Gemini
     screenplay_chunk_size_local: int = 3000   # Conservative for Ollama 3b models
 
     # Sound Effects (Freesound.org — free API, register at freesound.org/apiv2/apply/)
