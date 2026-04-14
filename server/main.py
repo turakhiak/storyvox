@@ -132,14 +132,6 @@ async def diagnostics():
     except Exception as e:
         providers["gemini"] = {"configured": False, "error": str(e)[:100]}
 
-    try:
-        if settings.groq_api_key:
-            providers["groq"] = {"configured": True, "model": settings.groq_model}
-        else:
-            providers["groq"] = {"configured": False}
-    except Exception as e:
-        providers["groq"] = {"configured": False, "error": str(e)[:100]}
-
     providers["ollama"] = {
         "configured": True,
         "note": "local only — not available on Render",
