@@ -28,8 +28,9 @@ export default function HomePage() {
   }, [setBooks]);
 
   const handleUpload = useCallback(async (file: File) => {
-    if (!file.name.toLowerCase().endsWith(".epub")) {
-      setError("Only .epub files are supported");
+    const name = file.name.toLowerCase();
+    if (!name.endsWith(".epub") && !name.endsWith(".pdf")) {
+      setError("Only .epub and .pdf files are supported");
       return;
     }
     setUploading(true);
@@ -100,10 +101,10 @@ export default function HomePage() {
             {/* Upload button */}
             <label className="btn-primary flex items-center gap-2 cursor-pointer">
               <Upload className="w-4 h-4" />
-              <span>Upload Epub</span>
+              <span>Upload Book</span>
               <input
                 type="file"
-                accept=".epub"
+                accept=".epub,.pdf"
                 className="hidden"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
@@ -150,7 +151,7 @@ export default function HomePage() {
           <div className="glass-card px-6 py-4 flex items-center gap-4">
             <div className="w-8 h-8 rounded-full border-2 border-amber-warm border-t-transparent animate-spin" />
             <div>
-              <p className="font-ui font-medium text-ink-800 dark:text-ink-200">Uploading & parsing epub...</p>
+              <p className="font-ui font-medium text-ink-800 dark:text-ink-200">Uploading & parsing book...</p>
               <p className="font-ui text-sm text-ink-500">Extracting chapters, metadata, and cover art</p>
             </div>
           </div>
@@ -179,7 +180,7 @@ export default function HomePage() {
               Your library is empty
             </h2>
             <p className="text-ink-500 dark:text-ink-400 font-ui text-center max-w-md mb-8">
-              Drop an epub file here or click upload to get started.
+              Drop an epub or PDF file here, or click upload to get started.
               StoryVox will extract the chapters, detect characters,
               and help you create a radio play.
             </p>

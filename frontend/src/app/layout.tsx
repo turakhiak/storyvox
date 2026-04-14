@@ -4,7 +4,7 @@ import ServerKeepAlive from "@/components/ServerKeepAlive";
 
 export const metadata: Metadata = {
   title: "StoryVox — Turn Books into Radio Plays",
-  description: "Upload any epub and transform it into a fully-voiced radio play with AI-powered screenplay conversion and multi-character voices.",
+  description: "Upload any epub or PDF and transform it into a fully-voiced radio play with AI-powered screenplay conversion and multi-character voices.",
 };
 
 export default function RootLayout({

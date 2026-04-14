@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from models.database import get_db, Book, Chapter, Screenplay, ScreenplaySegment
 from models.schemas import BookResponse, ChapterListResponse
 from services.epub.parser import parse_epub, save_cover
+from services.pdf.parser import parse_pdf
 from config import settings
 
 logger = __import__("logging").getLogger(__name__)
@@ -19,25 +20,32 @@ router = APIRouter(prefix="/api/books", tags=["books"])
 
 @router.post("", response_model=BookResponse)
 async def upload_book(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Upload an epub file and parse it into the library."""
-    if not file.filename or not file.filename.lower().endswith(".epub"):
-        raise HTTPException(400, "Only .epub files are supported")
+    """Upload an .epub or .pdf file and parse it into the library."""
+    filename = (file.filename or "").lower()
+    if filename.endswith(".epub"):
+        fmt = "epub"
+    elif filename.endswith(".pdf"):
+        fmt = "pdf"
+    else:
+        raise HTTPException(400, "Only .epub and .pdf files are supported")
 
-    # Save uploaded file
+    # Save uploaded file — we keep the old "epubs" directory name so existing
+    # installs don't need a migration; the path column stays `epub_path`.
     file_id = str(uuid.uuid4())
     epub_dir = os.path.join(settings.upload_dir, "epubs")
     os.makedirs(epub_dir, exist_ok=True)
-    epub_path = os.path.join(epub_dir, f"{file_id}.epub")
+    epub_path = os.path.join(epub_dir, f"{file_id}.{fmt}")
 
     with open(epub_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    # Parse the epub
+    # Parse the file using the right parser for its format
     try:
-        parsed = parse_epub(epub_path)
+        parsed = parse_pdf(epub_path) if fmt == "pdf" else parse_epub(epub_path)
     except Exception as e:
-        os.remove(epub_path)
-        raise HTTPException(400, f"Failed to parse epub: {str(e)}")
+        try: os.remove(epub_path)
+        except OSError: pass
+        raise HTTPException(400, f"Failed to parse {fmt}: {str(e)}")
 
     # Save cover image
     cover_url = None
