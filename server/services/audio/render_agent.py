@@ -111,7 +111,6 @@ class AudioRenderAgent:
         # Run all renders in parallel
         await asyncio.gather(*(render_segment(seg) for seg in segments))
 
-        screenplay.status = "audio_ready"
         self.db.commit()
         logger.info(f"✅ AUDIO RENDER AGENT: Render complete for Screenplay {screenplay_id}")
         return screenplay

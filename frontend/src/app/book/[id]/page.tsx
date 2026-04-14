@@ -262,6 +262,7 @@ export default function BookPage() {
             bookId={book.id}
             chapters={chapters}
             characters={characters}
+            preferredMode={batchMode}
           />
         )}
       </div>
@@ -1270,10 +1271,12 @@ function AudioPlayerTab({
   bookId,
   chapters,
   characters,
+  preferredMode = "radio_play",
 }: {
   bookId: string;
   chapters: Chapter[];
   characters: Character[];
+  preferredMode?: "radio_play" | "faithful";
 }) {
   const [batchStatus, setBatchStatus] = useState<BatchStatus | null>(null);
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
@@ -1353,7 +1356,14 @@ function AudioPlayerTab({
     setLoadingScreenplay(true);
     setScreenplay(null);
     try {
-      const sp = await getScreenplay(ch.id, "radio_play");
+      // Try the preferred mode first, fall back to the other mode
+      let sp: Screenplay | null = null;
+      try {
+        sp = await getScreenplay(ch.id, preferredMode);
+      } catch {
+        const fallback = preferredMode === "faithful" ? "radio_play" : "faithful";
+        try { sp = await getScreenplay(ch.id, fallback); } catch { /* no screenplay */ }
+      }
       setScreenplay(sp);
     } catch {
       setScreenplay(null);
