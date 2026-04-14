@@ -1,7 +1,7 @@
 """
 Screenplay Pipeline — Writer/Director dual-LLM feedback loop.
 
-Writer (cheap/fast) drafts the screenplay.
+Writer drafts the screenplay.
 Director (smart/analytical) critiques it.
 Loop until approved or max rounds.
 
@@ -211,7 +211,7 @@ class ScreenplayPipeline:
         mode: str,
     ) -> PipelineResult:
         """
-        Full Writer/Director loop for cloud providers (Gemini/Groq).
+        Full Writer/Director loop for Gemini.
         Chunks are processed sequentially to maintain narrative continuity
         (each chunk's prompt includes the last 3 segments of the previous chunk).
         """
@@ -428,7 +428,7 @@ class ScreenplayPipeline:
 
         Different LLMs use different key names:
           - Gemini (schema-aware): {"scores": {"faithfulness": 7, ...}, "revision_notes": [...]}
-          - Groq (no schema):      {"evaluation": {"faithfulness_to_source": 4, ...}, "feedback": {...}}
+
           - Ollama:                 varies wildly
 
         This normalizes all of them into the canonical format.
@@ -549,7 +549,7 @@ class ScreenplayPipeline:
         items = []
         for i, note in enumerate(notes, 1):
             if isinstance(note, str):
-                # Groq sometimes returns revision_notes as a list of plain strings
+
                 items.append(f"{i}. [MINOR] {note}")
             elif isinstance(note, dict):
                 severity = note.get("severity", "minor")
