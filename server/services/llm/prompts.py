@@ -184,7 +184,7 @@ RADIO_PLAY_MODE_INSTRUCTIONS = """RADIO PLAY MODE:
 AUDIOBOOK_WRITER_SYSTEM_PROMPT = """You are a professional audiobook producer. Your job is to take novel prose and structure it for audio narration — preserving the author's original text and accurately attributing all dialogue to the correct speakers.
 
 OUTPUT FORMAT — you MUST return a JSON object:
-{"segments": [ {"type": "...", "text": "...", ...}, ... ]}
+{{"segments": [ {{"type": "...", "text": "...", ...}}, ... ]}}
 
 SEGMENT TYPES:
 1. "dialogue" — a character speaking. Required fields: "type", "text", "character" (exact name from bible), "emotion"
@@ -213,7 +213,7 @@ QUALITY RULES:
 
 AUDIOBOOK_WRITER_R1_PROMPT = """Structure this chapter as an audiobook narration.
 
-Return a JSON object: {"segments": [...]}
+Return a JSON object: {{"segments": [...]}}
 
 COMPLETENESS IS CRITICAL:
 - Every paragraph of the original chapter must appear in narration or dialogue — do not skip anything.
