@@ -1,5 +1,5 @@
 """
-Base LLM Client interface and implementations for Gemini, Groq, and Ollama.
+Base LLM Client interface and implementations for Gemini and Ollama.
 
 Error taxonomy used throughout:
   RateLimitError      — per-minute 429, short cooldown (60 s), worth retrying soon
@@ -16,7 +16,6 @@ import time
 from typing import Optional, Union, Any, Protocol
 from google import genai
 from google.genai import types as genai_types
-from groq import Groq
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -91,24 +90,6 @@ def _classify_gemini_error(err_str: str) -> type:
     if "resource_exhausted" in lower or ("quota" in lower and "daily" in lower):
         return QuotaExhaustedError
     # Per-minute rate limit
-    if "429" in err_str or "rate_limit" in lower or "too many requests" in lower:
-        return RateLimitError
-    return ProviderError
-
-
-def _classify_groq_error(err_str: str) -> type:
-    lower = err_str.lower()
-    # Daily/monthly token budget exhausted — long cooldown, don't retry for hours.
-    # Groq TPD errors contain "tokens per day", "tpd", or "need more tokens".
-    # Must check BEFORE the generic "429" check because TPD errors are also 429s.
-    if any(kw in lower for kw in (
-        "tokens per day", "tpd", "org tokens per day", "need more tokens",
-        "token per day", "tokens/day",
-    )):
-        return QuotaExhaustedError
-    if "quota" in lower or "billing" in lower:
-        return QuotaExhaustedError
-    # Per-minute rate limit — short cooldown, worth retrying soon
     if "429" in err_str or "rate_limit" in lower or "too many requests" in lower:
         return RateLimitError
     return ProviderError
@@ -240,90 +221,6 @@ class GeminiClient:
                 return parse_llm_json(raw)
             except ValueError:
                 raise ParseError(f"Gemini returned unparseable JSON: {raw[:300]}") from e
-
-
-# ---------------------------------------------------------------------------
-# Groq
-# ---------------------------------------------------------------------------
-
-class GroqClient:
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "llama-3.3-70b-versatile"):
-        key = api_key or settings.groq_api_key
-        if not key:
-            raise ValueError("GROQ_API_KEY is required")
-        self.client = Groq(api_key=key)
-        self.model_name = model_name
-
-    @property
-    def is_local(self) -> bool:
-        return False
-
-    async def generate(
-        self,
-        system: str,
-        user: str,
-        temperature: float = 0.7,
-        response_schema: Optional[Any] = None,
-    ) -> str:
-        if response_schema and "json" not in (system + user).lower():
-            user += "\n\nIMPORTANT: Respond in valid JSON format."
-
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                loop = asyncio.get_running_loop()
-                # 90s timeout — if Groq hangs it won't block the batch task forever
-                completion = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        lambda: self.client.chat.completions.create(
-                            messages=[
-                                {"role": "system", "content": system},
-                                {"role": "user", "content": user},
-                            ],
-                            model=self.model_name,
-                            temperature=temperature,
-                            response_format={"type": "json_object"} if response_schema else None,
-                        ),
-                    ),
-                    timeout=90,
-                )
-                logger.debug(f"Groq response (first 200): {completion.choices[0].message.content[:200]}")
-                return completion.choices[0].message.content
-
-            except asyncio.TimeoutError:
-                raise ProviderError(f"Groq timed out after 90s")
-
-            except Exception as e:
-                err_str = str(e)
-                exc_class = _classify_groq_error(err_str)
-
-                if exc_class is QuotaExhaustedError:
-                    logger.error(f"Groq quota exhausted: {err_str[:120]}")
-                    raise QuotaExhaustedError(f"Groq quota exhausted: {err_str}")
-
-                if exc_class is RateLimitError:
-                    if attempt < max_retries - 1:
-                        wait = (2 ** attempt) + 1   # 2 s, 5 s
-                        logger.warning(f"Groq rate limited, retrying in {wait}s (attempt {attempt+1})")
-                        await asyncio.sleep(wait)
-                        continue
-                    raise RateLimitError(f"Groq rate limited after {max_retries} attempts: {err_str}")
-
-                raise ProviderError(f"Groq error: {err_str}")
-
-    async def generate_json(
-        self,
-        system: str,
-        user: str,
-        temperature: float = 0.7,
-        response_schema: Optional[Any] = None,
-    ) -> Union[dict, list]:
-        raw = await self.generate(system, user, temperature, response_schema=response_schema)
-        try:
-            return parse_llm_json(raw)
-        except ValueError as e:
-            raise ParseError(f"Groq returned unparseable JSON: {raw[:300]}") from e
 
 
 # ---------------------------------------------------------------------------
@@ -553,70 +450,33 @@ def parse_llm_json(raw: str) -> Union[dict, list]:
 
 def get_llm_client(role: str = "general") -> LLMClient:
     """
-    Build a client (or CompositeLLMClient) for the given role.
+    Build a client for the given role.
 
-    Priority order per role:
-      writer             → Groq (fast, very high RPM) → Gemini → Ollama
-      director           → Gemini (best analytical)   → Groq   → Ollama
-      character_detection→ Gemini (best JSON schema)  → Groq   → Ollama
-      general            → primary_provider → fallback → Ollama
+    Gemini is the primary (and only cloud) provider.
+    Creative roles (writer/director) use the quality model (gemini-2.5-flash).
+    Simple roles (character_detection, general) use the fast model (gemini-2.5-flash-lite).
+    Falls back to Ollama if no Gemini API key is set.
     """
-    clients = []
-
-    def make(provider: str, model: Optional[str] = None):
-        try:
-            if provider == "gemini" and settings.gemini_api_key:
-                return GeminiClient(model_name=model or settings.gemini_model)
-            if provider == "groq" and settings.groq_api_key:
-                return GroqClient(model_name=model or settings.groq_model)
-            if provider == "ollama":
-                return OllamaClient(
-                    base_url=getattr(settings, "ollama_base_url", "http://127.0.0.1:11434"),
-                    model_name=getattr(settings, "ollama_model", "llama3.2:3b"),
-                    num_ctx=getattr(settings, "ollama_num_ctx", 32768),
-                )
-        except Exception as e:
-            logger.warning(f"Could not create {provider} client: {e}")
-        return None
-
-    # Role-specific preferred order and model selection
-    # Creative roles (writer/director) use the quality model (gemini-2.5-flash)
-    # Simple roles (character_detection, general) use the fast model (gemini-1.5-flash)
+    # Creative roles use the higher-quality Gemini model
     use_quality_model = role in ("writer", "director")
-
-    if role == "writer":
-        order = ["groq", "gemini", "ollama"]
-    elif role == "director":
-        order = ["gemini", "groq", "ollama"]
-    elif role == "character_detection":
-        order = ["gemini", "groq", "ollama"]
-    else:
-        primary = settings.primary_provider.lower()
-        fallback = "groq" if primary == "gemini" else "gemini"
-        order = [primary, fallback, "ollama"]
-
-    gemini_model_for_role = (
+    gemini_model = (
         getattr(settings, "gemini_model_quality", settings.gemini_model)
         if use_quality_model else settings.gemini_model
     )
-    logger.info(f"get_llm_client(role={role}): order={order}, gemini_model={gemini_model_for_role}")
 
-    seen: set[str] = set()
-    for provider in order:
-        if provider not in seen:
-            seen.add(provider)
-            # Pass the quality model name for creative roles using Gemini
-            model_override = None
-            if provider == "gemini" and use_quality_model:
-                model_override = getattr(settings, "gemini_model_quality", None)
-            c = make(provider, model=model_override)
-            if c:
-                clients.append(c)
+    if settings.gemini_api_key:
+        logger.info(f"get_llm_client(role={role}): GeminiClient model={gemini_model}")
+        return GeminiClient(model_name=gemini_model)
 
-    if not clients:
-        raise ValueError("No LLM providers configured. Add at least one API key or run Ollama.")
-
-    if len(clients) == 1:
-        return clients[0]
-
-    return CompositeLLMClient(clients)
+    # Local fallback — Ollama only (no Gemini key)
+    logger.warning(f"get_llm_client(role={role}): No GEMINI_API_KEY — falling back to Ollama")
+    try:
+        return OllamaClient(
+            base_url=getattr(settings, "ollama_base_url", "http://127.0.0.1:11434"),
+            model_name=getattr(settings, "ollama_model", "llama3.2:3b"),
+            num_ctx=getattr(settings, "ollama_num_ctx", 32768),
+        )
+    except Exception as e:
+        raise ValueError(
+            f"No LLM provider available: GEMINI_API_KEY not set and Ollama failed: {e}"
+        )
