@@ -181,7 +181,7 @@ CHARACTER_COLORS = [
 ]
 
 # Cloud models can handle large context; local Ollama needs small chunks
-CLOUD_MAX_CHARS = 28000   # ~7k words per chunk — keeps JSON payload under ~30KB (avoids Groq 413)
+CLOUD_MAX_CHARS = 28000   # ~7k words per chunk — keeps JSON payload under ~30KB ()
 LOCAL_MAX_CHARS = 12000   # Ollama 8b can handle ~3000 words reliably
 
 
