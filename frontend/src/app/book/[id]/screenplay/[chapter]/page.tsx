@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Loader2, Play, Radio, BookOpen, Sparkles,
@@ -61,6 +61,12 @@ export default function ScreenplayPage() {
   const [mode, setMode] = useState<"radio_play" | "faithful">("radio_play");
   const [viewMode, setViewMode] = useState<"screenplay" | "sidebyside">("screenplay");
   const [error, setError] = useState<string | null>(null);
+  // Auto-detect the mode on first load only — after the user clicks a mode
+  // button, respect their choice even if that mode has no screenplay.
+  const didAutoDetectRef = useRef(false);
+
+  // Reset the auto-detect gate whenever we navigate to a different chapter.
+  useEffect(() => { didAutoDetectRef.current = false; }, [id, num]);
 
   useEffect(() => {
     if (!id || !num) return;
@@ -74,19 +80,29 @@ export default function ScreenplayPage() {
       getCharacters(id).then(setCharacters).catch(() => []),
     ])
       .then(async () => {
-        // Try to load existing screenplay
-        try {
-          const sp = await getScreenplay(
-            (await getChapter(id, num)).id,
-            mode
-          );
+        // Try to load an existing screenplay. If the current `mode` has nothing,
+        // auto-detect by trying the other mode and adopt it — otherwise users who
+        // generated audiobook would see an empty "radio_play" page with no screenplay.
+        const chapterObj = await getChapter(id, num);
+        const tryLoad = async (m: "radio_play" | "faithful") => {
+          try { return await getScreenplay(chapterObj.id, m); } catch { return null; }
+        };
+        let resolvedMode: "radio_play" | "faithful" = mode;
+        let sp = await tryLoad(mode);
+        // Only fall back to the other mode on the initial load — after the user
+        // explicitly toggles modes, respect their choice even if it's empty.
+        if (!sp && !didAutoDetectRef.current) {
+          const other: "radio_play" | "faithful" = mode === "faithful" ? "radio_play" : "faithful";
+          const alt = await tryLoad(other);
+          if (alt) { sp = alt; resolvedMode = other; setMode(other); }
+        }
+        didAutoDetectRef.current = true;
+        if (sp) {
           setScreenplay(sp);
           if (sp.status === "complete") {
-            const revs = await getRevisions(sp.chapter_id, mode);
+            const revs = await getRevisions(sp.chapter_id, resolvedMode);
             setRevisions(revs);
           }
-        } catch {
-          // No screenplay yet
         }
       })
       .catch(console.error)
@@ -368,7 +384,11 @@ export default function ScreenplayPage() {
                 </div>
 
                 {screenplay.final_scores && (
-                  <div className="grid grid-cols-5 gap-4 mt-4">
+                  <div className={cn(
+                    "grid gap-4 mt-4",
+                    // Column count follows criteria count (audiobook=4, radio_play=5)
+                    Object.keys(screenplay.final_scores).length === 4 ? "grid-cols-4" : "grid-cols-5"
+                  )}>
                     {Object.entries(screenplay.final_scores).map(([key, score]) => (
                       <div key={key}>
                         <div className="flex items-center justify-between mb-1">

@@ -19,11 +19,16 @@ import type { Book, Chapter, Character, Voice, BatchStatus, ChapterStatus, Scree
 type Tab = "chapters" | "characters" | "voices" | "production" | "screenplay" | "audio";
 
 const CRITERIA_LABELS: Record<string, string> = {
+  // Radio play (5 criteria)
   dialogue_authenticity: "Dialogue",
   pacing_rhythm: "Pacing",
   character_voice_consistency: "Voice",
   emotional_arc: "Emotion",
   faithfulness: "Faithfulness",
+  // Audiobook (4 criteria)
+  text_faithfulness: "Text Fidelity",
+  dialogue_attribution: "Attribution",
+  flow_and_pacing: "Flow",
 };
 
 const EMOTION_COLORS: Record<string, string> = {
@@ -1229,7 +1234,11 @@ function ScreenplayViewTab({
                   </div>
                 </div>
                 {screenplay.final_scores && (
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                  <div className={cn(
+                    "grid grid-cols-2 gap-3",
+                    // Column count follows criteria count (audiobook=4, radio_play=5)
+                    Object.keys(screenplay.final_scores).length === 4 ? "sm:grid-cols-4" : "sm:grid-cols-5"
+                  )}>
                     {Object.entries(screenplay.final_scores).map(([key, score]) => (
                       <div key={key}>
                         <div className="flex justify-between mb-1">
