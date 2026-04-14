@@ -50,6 +50,8 @@ export default function BookPage() {
   const [activeTab, setActiveTab] = useState<Tab>("chapters");
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Lifted from ProductionTab so Screenplay + Audio tabs can see the selected mode
+  const [batchMode, setBatchMode] = useState<"radio_play" | "faithful">("radio_play");
   // Shows a "server is waking up" hint after 12s — matches the first retry delay
   const [warming, setWarming] = useState(false);
 
@@ -248,6 +250,8 @@ export default function BookPage() {
             chapters={chapters}
             hasCharacters={characters.length > 0}
             onBookUpdate={setBook}
+            batchMode={batchMode}
+            setBatchMode={setBatchMode}
           />
         )}
         {activeTab === "screenplay" && (
@@ -255,6 +259,7 @@ export default function BookPage() {
             bookId={book.id}
             chapters={chapters}
             characters={characters}
+            initialMode={batchMode}
           />
         )}
         {activeTab === "audio" && (
@@ -412,19 +417,22 @@ function ProductionTab({
   chapters,
   hasCharacters,
   onBookUpdate,
+  batchMode,
+  setBatchMode,
 }: {
   bookId: string;
   book: Book;
   chapters: Chapter[];
   hasCharacters: boolean;
   onBookUpdate: (b: Book) => void;
+  batchMode: "radio_play" | "faithful";
+  setBatchMode: (m: "radio_play" | "faithful") => void;
 }) {
   const router = useRouter();
   const [batchStatus, setBatchStatus] = useState<BatchStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [polling, setPolling] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [batchMode, setBatchMode] = useState<"radio_play" | "faithful">("radio_play");
 
   // Fetch batch status on mount and poll while processing
   const fetchStatus = async () => {
@@ -1036,15 +1044,17 @@ function ScreenplayViewTab({
   bookId,
   chapters,
   characters,
+  initialMode = "radio_play",
 }: {
   bookId: string;
   chapters: Chapter[];
   characters: Character[];
+  initialMode?: "radio_play" | "faithful";
 }) {
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
   const [screenplay, setScreenplay] = useState<Screenplay | null>(null);
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<"radio_play" | "faithful">("radio_play");
+  const [mode, setMode] = useState<"radio_play" | "faithful">(initialMode);
   const [currentlyPlayingIndex, setCurrentlyPlayingIndex] = useState<number | null>(null);
 
   // ── Audio engine ────────────────────────────────────────────────────────────
