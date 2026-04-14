@@ -54,6 +54,22 @@ class DirectorCritique(BaseModel):
     strengths: List[str] = []
     summary: Optional[str] = None
 
+class AudiobookCriterionScore(BaseModel):
+    text_faithfulness: int = Field(..., description="1-10: Does narration preserve the author's original prose?")
+    dialogue_attribution: int = Field(..., description="1-10: Are dialogue lines attributed to the correct speaker?")
+    character_voice_consistency: int = Field(..., description="1-10: Does each character's dialogue sound authentic?")
+    flow_and_pacing: int = Field(..., description="1-10: Are paragraphs split at natural breath points?")
+
+class AudiobookDirectorCritique(BaseModel):
+    round: Optional[int] = None
+    verdict: Optional[str] = Field(None, description="APPROVE or REVISE")
+    scores: AudiobookCriterionScore
+    weighted_average: Optional[float] = None
+    revision_notes: List[RevisionNote] = []
+    strengths: List[str] = []
+    summary: Optional[str] = None
+
+
 class ScenePlan(BaseModel):
     start_segment: int
     end_segment: int

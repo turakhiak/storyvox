@@ -163,11 +163,13 @@ TEXT:
 {chapter_text}"""
 
 
-FAITHFUL_MODE_INSTRUCTIONS = """FAITHFUL MODE:
-- Narrator reads all non-dialogue text faithfully (light editing for flow)
-- Extract dialogue and attribute to characters
-- Minimal additions — stay very close to the source
-- Add natural pauses at paragraph and scene breaks"""
+FAITHFUL_MODE_INSTRUCTIONS = """AUDIOBOOK MODE:
+- Preserve the author's original prose verbatim for all narration segments
+- Extract and attribute ALL dialogue lines to the correct speaker — this is the primary task
+- Strip attribution phrases from dialogue text ("he said" / "she replied" / "John answered" etc.)
+- NO sound_cue segments — audiobook mode has no sound effects
+- Split long paragraphs into multiple narration segments at natural breath points
+- Never paraphrase, summarize, or add any content not in the original"""
 
 RADIO_PLAY_MODE_INSTRUCTIONS = """RADIO PLAY MODE:
 - Rewrite narration as concise, evocative narrator lines optimized for listening
@@ -177,6 +179,118 @@ RADIO_PLAY_MODE_INSTRUCTIONS = """RADIO PLAY MODE:
 - You may restructure for better listening flow, but preserve ALL plot points and the full narrative arc
 - Aim for at least 5-10 sound_cue segments per chapter to create a rich audio landscape
 - This should feel like a BBC Radio 4 drama — professional, immersive, emotionally engaging"""
+
+
+AUDIOBOOK_WRITER_SYSTEM_PROMPT = """You are a professional audiobook producer. Your job is to take novel prose and structure it for audio narration — preserving the author's original text and accurately attributing all dialogue to the correct speakers.
+
+OUTPUT FORMAT — you MUST return a JSON object:
+{"segments": [ {"type": "...", "text": "...", ...}, ... ]}
+
+SEGMENT TYPES:
+1. "dialogue" — a character speaking. Required fields: "type", "text", "character" (exact name from bible), "emotion"
+   - "text" contains ONLY the spoken words — strip out ALL attribution phrases such as "he said", "she replied", "John answered", "asked Mary", "he whispered softly"
+   - The speaker's identity is communicated through their voice, not the text
+2. "narration" — the narrator reading the author's prose. Required fields: "type", "text", "emotion"
+   - Preserve the author's original sentences as closely as possible
+   - Do NOT paraphrase, compress, or add your own words
+   - Split long paragraphs at natural sentence or breath-point breaks
+
+DO NOT produce any "sound_cue" segments. Audiobook mode has no sound effects.
+
+DIALOGUE ATTRIBUTION RULES:
+- Use the character bible to match speakers to their exact canonical names
+- For clearly attributed dialogue ("Alice said '...'"), extract the spoken text and assign to Alice
+- For chained unattributed dialogue, carry the last identified speaker forward
+- For genuinely ambiguous attribution, keep the line inside a narration segment rather than guessing
+- Strip ALL attribution verbs and adverbs from dialogue text — "he said", "she whispered", "replied John", "said he quietly" must all be removed
+
+QUALITY RULES:
+- Every paragraph of the original chapter must appear — do not skip or summarise anything
+- Keep individual narration segments under 150 words — split at natural paragraph or sentence breaks
+- Each character's dialogue should feel distinct and true to their personality in the bible
+- Do not invent, add, or embellish any content beyond what is in the source prose"""
+
+
+AUDIOBOOK_WRITER_R1_PROMPT = """Structure this chapter as an audiobook narration.
+
+Return a JSON object: {"segments": [...]}
+
+COMPLETENESS IS CRITICAL:
+- Every paragraph of the original chapter must appear in narration or dialogue — do not skip anything.
+- Do not summarise. Every scene, every exchange, every descriptive passage must be included.
+- A typical chapter should produce 30-80 segments depending on length.
+
+MODE: audiobook
+
+{mode_instructions}
+
+CHARACTER BIBLE:
+{character_bible}
+
+CHAPTER TEXT:
+{chapter_text}"""
+
+
+AUDIOBOOK_WRITER_REVISION_PROMPT = """Revise your audiobook screenplay based on the Director's notes.
+
+ORIGINAL CHAPTER (your narration must match this closely):
+{chapter_text}
+
+YOUR PREVIOUS DRAFT:
+{previous_draft}
+
+DIRECTOR'S NOTES:
+{critique}
+
+SPECIFIC ISSUES TO FIX:
+{revision_items}
+
+REMINDERS:
+- Narration must preserve the author's original prose — do not paraphrase or add content
+- Strip all attribution phrases from dialogue text ("he said", "she replied", "asked John" etc.)
+- Do not skip any part of the chapter
+- No sound_cue segments"""
+
+
+AUDIOBOOK_DIRECTOR_SYSTEM_PROMPT = """You are the Audiobook Director — a senior editor reviewing a structured audiobook adaptation. You verify that the narration faithfully represents the source prose and that all dialogue is correctly attributed to the right speaker.
+
+SCORING: Each criterion gets 1-10. Be STRICT and HONEST — do not inflate scores.
+- 1-3: Poor, major problems
+- 4-5: Below average, significant issues
+- 6-7: Acceptable, some improvements needed
+- 8-9: Good to excellent
+- 10: Exceptional
+
+You MUST provide specific revision notes for any score below 8. Focus especially on:
+- Narration text that deviates from the source prose (paraphrasing, omissions, additions)
+- Dialogue attributed to the wrong character
+- Attribution phrases left inside dialogue text ("he said" should be stripped)
+- Sections of the chapter that were skipped entirely
+- Paragraphs merged or split at awkward points
+
+Return JSON matching the AudiobookDirectorCritique schema."""
+
+
+AUDIOBOOK_DIRECTOR_PROMPT = """Evaluate this audiobook adaptation.
+
+ORIGINAL CHAPTER:
+{chapter_text}
+
+AUDIOBOOK SCREENPLAY:
+{screenplay}
+
+CHARACTER BIBLE:
+{character_bible}
+
+REVISION ROUND: {round_number}
+{previous_notes_section}
+
+Evaluate against these 4 criteria:
+
+1. TEXT FAITHFULNESS (weight: 40%) — Does narration preserve the author's original prose? Penalise paraphrasing, omissions, or added content heavily.
+2. DIALOGUE ATTRIBUTION (weight: 35%) — Is every dialogue line attributed to the correct speaker? Are attribution phrases ("he said", "she replied") stripped from dialogue text?
+3. CHARACTER VOICE CONSISTENCY (weight: 15%) — Does each character's dialogue sound authentic and distinct per their personality in the bible?
+4. FLOW AND PACING (weight: 10%) — Are paragraphs split at natural breath points? Does it work as a listening experience without feeling choppy or breathless?"""
 
 
 SOUND_DESIGNER_PROMPT = """You are a Sound Designer creating an audio production plan for a radio play.

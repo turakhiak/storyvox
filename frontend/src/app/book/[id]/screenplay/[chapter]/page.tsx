@@ -16,11 +16,16 @@ import {
 import type { Book, Chapter, Character, Screenplay, RevisionRound, ScreenplaySegment } from "@/lib/api";
 
 const CRITERIA_LABELS: Record<string, string> = {
+  // Radio play criteria
   dialogue_authenticity: "Dialogue",
   pacing_rhythm: "Pacing",
   character_voice_consistency: "Voice Consistency",
   emotional_arc: "Emotion",
   faithfulness: "Faithfulness",
+  // Audiobook criteria
+  text_faithfulness: "Text Fidelity",
+  dialogue_attribution: "Attribution",
+  flow_and_pacing: "Flow",
 };
 
 const EMOTION_COLORS: Record<string, string> = {
@@ -200,12 +205,12 @@ export default function ScreenplayPage() {
                 className={cn(
                   "px-3 py-1.5 rounded-md text-xs font-ui font-medium transition-all",
                   mode === "faithful"
-                    ? "bg-amber-warm text-ink-950 shadow-sm"
+                    ? "bg-stage-blue text-white shadow-sm"
                     : "text-ink-500 hover:text-ink-700 dark:hover:text-ink-300"
                 )}
               >
                 <BookOpen className="w-3 h-3 inline mr-1" />
-                Faithful
+                Audiobook
               </button>
             </div>
           </div>
@@ -244,7 +249,7 @@ export default function ScreenplayPage() {
             <p className="font-ui text-ink-500 dark:text-ink-400 max-w-md mx-auto mb-8">
               {screenplay?.status === "failed" 
                 ? "Something went wrong during the adaptation. You can try regenerating below."
-                : `The Writer LLM will draft a ${mode === "radio_play" ? "radio play" : "faithful"} adaptation, then the Director will critique and refine it through up to 4 rounds.`}
+                : `The Writer LLM will draft a ${mode === "radio_play" ? "radio play adaptation" : "faithful audiobook narration with attributed character voices"}, then the Director will critique and refine it.`}
             </p>
             <button onClick={handleRegenerate} className="btn-primary text-lg px-8 py-4">
               <Sparkles className="w-5 h-5 inline mr-2" />
@@ -400,6 +405,7 @@ export default function ScreenplayPage() {
                   key={seg.id}
                   segment={seg}
                   index={i}
+                  mode={mode}
                   isPlaying={currentlyPlayingIndex === i}
                   onPlayRequested={() => setCurrentlyPlayingIndex(i)}
                   onPlaybackEnded={() => {
@@ -455,6 +461,7 @@ function SegmentCard({
   segment,
   index,
   charColorMap,
+  mode,
   isPlaying,
   onPlayRequested,
   onPlaybackEnded,
@@ -462,6 +469,7 @@ function SegmentCard({
   segment: ScreenplaySegment;
   index: number;
   charColorMap: Record<string, string>;
+  mode: "radio_play" | "faithful";
   isPlaying: boolean;
   onPlayRequested: () => void;
   onPlaybackEnded: () => void;
@@ -541,6 +549,8 @@ function SegmentCard({
   };
 
   if (segment.type === "sound_cue") {
+    // Sound cues don't exist in audiobook mode — hide defensively if present
+    if (mode === "faithful") return null;
     return (
       <div className="segment-sound-cue flex items-center justify-between my-4 animate-fade-in bg-stage-blue/5 border-stage-blue/20"
         style={{ animationDelay: `${index * 20}ms` }}
@@ -555,17 +565,35 @@ function SegmentCard({
   }
 
   if (segment.type === "narration") {
+    const isAudiobook = mode === "faithful";
     return (
-      <div className="segment-narration animate-fade-in group flex gap-6" style={{ animationDelay: `${index * 20}ms` }}>
+      <div
+        className={cn(
+          "animate-fade-in group flex gap-6",
+          isAudiobook
+            ? "py-3 px-1 border-b border-ink-100 dark:border-ink-800/40"
+            : "segment-narration"
+        )}
+        style={{ animationDelay: `${index * 20}ms` }}
+      >
         <div className="flex-1">
-          <div className="flex items-center gap-2 mb-1.5">
-            <BookOpen className="w-3.5 h-3.5 text-ink-400" />
-            <span className="font-ui text-[10px] uppercase tracking-[0.2em] text-ink-400">Narrator</span>
-            <span className={cn("text-[10px] font-ui italic", EMOTION_COLORS[segment.emotion] || "text-ink-400")}>
-              ({segment.emotion})
-            </span>
-          </div>
-          <p className="font-body text-lg leading-relaxed">{segment.text}</p>
+          {!isAudiobook && (
+            <div className="flex items-center gap-2 mb-1.5">
+              <BookOpen className="w-3.5 h-3.5 text-ink-400" />
+              <span className="font-ui text-[10px] uppercase tracking-[0.2em] text-ink-400">Narrator</span>
+              <span className={cn("text-[10px] font-ui italic", EMOTION_COLORS[segment.emotion] || "text-ink-400")}>
+                ({segment.emotion})
+              </span>
+            </div>
+          )}
+          <p className={cn(
+            "leading-relaxed",
+            isAudiobook
+              ? "font-body text-lg text-ink-700 dark:text-ink-300 italic"
+              : "font-body text-lg"
+          )}>
+            {segment.text}
+          </p>
         </div>
         <PlayButton />
       </div>
@@ -573,6 +601,7 @@ function SegmentCard({
   }
 
   // Dialogue
+  const isAudiobook = mode === "faithful";
   return (
     <div
       className="segment-dialogue animate-fade-in group flex gap-6"
@@ -592,12 +621,19 @@ function SegmentCard({
           <span className="font-ui text-sm font-semibold" style={{ color: color || "#6B9080" }}>
             {segment.character_name}
           </span>
-          <span className={cn("text-[10px] font-ui italic", EMOTION_COLORS[segment.emotion] || "text-ink-400")}>
-            ({segment.emotion})
-          </span>
+          {!isAudiobook && (
+            <span className={cn("text-[10px] font-ui italic", EMOTION_COLORS[segment.emotion] || "text-ink-400")}>
+              ({segment.emotion})
+            </span>
+          )}
         </div>
-        <p className="font-body text-lg leading-relaxed text-ink-800 dark:text-ink-200">
-          {segment.text}
+        <p className={cn(
+          "font-body text-lg leading-relaxed",
+          isAudiobook
+            ? "text-ink-900 dark:text-ink-100 font-medium"
+            : "text-ink-800 dark:text-ink-200"
+        )}>
+          "{segment.text}"
         </p>
       </div>
       <PlayButton />

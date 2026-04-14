@@ -423,6 +423,7 @@ function ProductionTab({
   const [loading, setLoading] = useState(false);
   const [polling, setPolling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [batchMode, setBatchMode] = useState<"radio_play" | "faithful">("radio_play");
 
   // Fetch batch status on mount and poll while processing
   const fetchStatus = async () => {
@@ -463,6 +464,7 @@ function ProductionTab({
       const updated = await batchGenerate(bookId, {
         startFrom,
         audio: true,
+        mode: batchMode,
       });
       onBookUpdate(updated);
       await fetchStatus();
@@ -540,7 +542,7 @@ function ProductionTab({
             <span className="text-stage-red text-sm font-ui block">{error}</span>
             {(error.includes("quota") || error.includes("rate") || error.includes("429")) && (
               <span className="text-stage-red/70 text-xs font-ui mt-1 block">
-                Tip: Groq has a 100k token/day free limit. If hit, wait until midnight UTC (~5:30 AM IST) or the app will auto-use Gemini/Ollama as fallback.
+                Tip: Gemini has a free-tier rate limit. If you hit it, wait a few minutes and try again.
               </span>
             )}
             {error.includes("already processing") && (
@@ -603,35 +605,68 @@ function ProductionTab({
             </div>
           </div>
 
-          <div className="flex gap-3 flex-wrap">
-            {isProcessing ? (
-              <>
+          <div className="flex flex-col gap-3 items-end">
+            {/* Mode toggle — only shown when not processing */}
+            {!isProcessing && (
+              <div className="flex items-center bg-ink-100 dark:bg-ink-800 rounded-lg p-1 gap-1">
                 <button
-                  onClick={handleReset}
-                  disabled={loading}
-                  className="btn-ghost text-ink-500 border-ink-300 dark:border-ink-600 flex items-center gap-2 text-sm"
-                  title="Force-clear a stuck batch"
+                  onClick={() => setBatchMode("radio_play")}
+                  className={cn(
+                    "px-3 py-1.5 rounded-md font-ui text-xs font-medium transition-all",
+                    batchMode === "radio_play"
+                      ? "bg-amber-warm text-white shadow-sm"
+                      : "text-ink-500 dark:text-ink-400 hover:text-ink-800 dark:hover:text-ink-200"
+                  )}
                 >
-                  {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                  Force Reset
+                  🎙 Radio Play
                 </button>
-                <button onClick={handleStop} className="btn-ghost text-stage-red border-stage-red/30 flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4" />
-                  Stop Batch
+                <button
+                  onClick={() => setBatchMode("faithful")}
+                  className={cn(
+                    "px-3 py-1.5 rounded-md font-ui text-xs font-medium transition-all",
+                    batchMode === "faithful"
+                      ? "bg-stage-blue text-white shadow-sm"
+                      : "text-ink-500 dark:text-ink-400 hover:text-ink-800 dark:hover:text-ink-200"
+                  )}
+                >
+                  📖 Audiobook
                 </button>
-              </>
-            ) : (
-              <>
+              </div>
+            )}
+
+            <div className="flex gap-3 flex-wrap">
+              {isProcessing ? (
+                <>
+                  <button
+                    onClick={handleReset}
+                    disabled={loading}
+                    className="btn-ghost text-ink-500 border-ink-300 dark:border-ink-600 flex items-center gap-2 text-sm"
+                    title="Force-clear a stuck batch"
+                  >
+                    {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                    Force Reset
+                  </button>
+                  <button onClick={handleStop} className="btn-ghost text-stage-red border-stage-red/30 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4" />
+                    Stop Batch
+                  </button>
+                </>
+              ) : (
                 <button
                   onClick={() => handleBatchGenerate(bookmark + 1)}
-                  className="btn-primary flex items-center gap-2"
+                  className={cn(
+                    "btn-primary flex items-center gap-2",
+                    batchMode === "faithful" && "bg-stage-blue hover:bg-stage-blue/90 border-stage-blue"
+                  )}
                   disabled={loading}
                 >
                   {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                  {loading ? "Starting..." : `Generate Next 5 (from Ch. ${bookmark + 1})`}
+                  {loading
+                    ? "Starting..."
+                    : `Generate Next 5 · ${batchMode === "faithful" ? "Audiobook" : "Radio Play"} (from Ch. ${bookmark + 1})`}
                 </button>
-              </>
-            )}
+              )}
+            </div>
           </div>
         </div>
 

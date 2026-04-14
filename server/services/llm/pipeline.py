@@ -2,11 +2,11 @@
 Screenplay Pipeline — Writer/Director dual-LLM feedback loop.
 
 Writer drafts the screenplay.
-Director (smart/analytical) critiques it.
+Director critiques it.
 Loop until approved or max rounds.
 
 Optimisations:
-- Cloud providers: larger chunks (30k chars), 2 revision rounds
+- Gemini (cloud): larger chunks (30k chars), up to 3 revision rounds
 - Local Ollama: small chunks (3k chars), Writer-only single pass, Director skipped
 """
 import json
@@ -22,6 +22,9 @@ from .prompts import (
     DIRECTOR_SYSTEM_PROMPT, DIRECTOR_PROMPT,
     SOUND_DESIGNER_PROMPT,
     FAITHFUL_MODE_INSTRUCTIONS, RADIO_PLAY_MODE_INSTRUCTIONS,
+    AUDIOBOOK_WRITER_SYSTEM_PROMPT, AUDIOBOOK_WRITER_R1_PROMPT,
+    AUDIOBOOK_WRITER_REVISION_PROMPT,
+    AUDIOBOOK_DIRECTOR_SYSTEM_PROMPT, AUDIOBOOK_DIRECTOR_PROMPT,
 )
 from config import settings
 
@@ -52,6 +55,7 @@ class PipelineResult:
 class ScreenplayPipeline:
     MAX_ROUNDS = 3
     CHUNK_OVERLAP = 200
+    # Weights for radio_play mode
     WEIGHTS = {
         "dialogue_authenticity": 0.25,
         "pacing_rhythm": 0.20,
@@ -59,10 +63,21 @@ class ScreenplayPipeline:
         "emotional_arc": 0.20,
         "faithfulness": 0.10,
     }
+    # Weights for audiobook / faithful mode
+    WEIGHTS_AUDIOBOOK = {
+        "text_faithfulness": 0.40,
+        "dialogue_attribution": 0.35,
+        "character_voice_consistency": 0.15,
+        "flow_and_pacing": 0.10,
+    }
 
     def __init__(self, writer: LLMClient, director: LLMClient):
         self.writer = writer
         self.director = director
+
+    def _active_weights(self, mode: str) -> dict:
+        """Return the correct scoring weights for the given mode."""
+        return self.WEIGHTS_AUDIOBOOK if mode == "faithful" else self.WEIGHTS
 
     def _get_chunk_size(self) -> int:
         """Use large chunks for cloud providers, small for local Ollama."""
@@ -215,12 +230,22 @@ class ScreenplayPipeline:
         Chunks are processed sequentially to maintain narrative continuity
         (each chunk's prompt includes the last 3 segments of the previous chunk).
         """
-        from .schemas import ScreenplayDraft, DirectorCritique
+        from .schemas import ScreenplayDraft, DirectorCritique, AudiobookDirectorCritique
 
-        mode_instructions = (
-            FAITHFUL_MODE_INSTRUCTIONS if mode == "faithful"
-            else RADIO_PLAY_MODE_INSTRUCTIONS
-        )
+        is_audiobook = (mode == "faithful")
+        weights = self._active_weights(mode)
+
+        # Mode-specific prompt components
+        if is_audiobook:
+            writer_system = AUDIOBOOK_WRITER_SYSTEM_PROMPT
+            mode_instructions = FAITHFUL_MODE_INSTRUCTIONS
+            director_system = AUDIOBOOK_DIRECTOR_SYSTEM_PROMPT
+            director_schema = AudiobookDirectorCritique
+        else:
+            writer_system = WRITER_SYSTEM_PROMPT
+            mode_instructions = RADIO_PLAY_MODE_INSTRUCTIONS
+            director_system = DIRECTOR_SYSTEM_PROMPT
+            director_schema = DirectorCritique
 
         all_segments: list[dict] = []
         all_rounds: list[RevisionRoundResult] = []
@@ -246,27 +271,42 @@ class ScreenplayPipeline:
 
                 # === WRITER ===
                 if round_num == 1:
-                    prompt = WRITER_R1_PROMPT.format(
-                        mode=mode,
-                        mode_instructions=mode_instructions,
-                        character_bible=char_bible_str,
-                        chapter_text=chunk_text,
-                    )
+                    if is_audiobook:
+                        prompt = AUDIOBOOK_WRITER_R1_PROMPT.format(
+                            mode_instructions=mode_instructions,
+                            character_bible=char_bible_str,
+                            chapter_text=chunk_text,
+                        )
+                    else:
+                        prompt = WRITER_R1_PROMPT.format(
+                            mode=mode,
+                            mode_instructions=mode_instructions,
+                            character_bible=char_bible_str,
+                            chapter_text=chunk_text,
+                        )
                     if continuity_context:
                         prompt = f"{continuity_context}\n\n{prompt}"
                 else:
                     revision_items = self._format_revision_items(previous_critique)
-                    prompt = WRITER_REVISION_PROMPT.format(
-                        chapter_text=chunk_text,
-                        previous_draft=json.dumps(previous_draft),
-                        critique=json.dumps(previous_critique.get("revision_notes", [])),
-                        revision_items=revision_items,
-                    )
+                    if is_audiobook:
+                        prompt = AUDIOBOOK_WRITER_REVISION_PROMPT.format(
+                            chapter_text=chunk_text,
+                            previous_draft=json.dumps(previous_draft),
+                            critique=json.dumps(previous_critique.get("revision_notes", [])),
+                            revision_items=revision_items,
+                        )
+                    else:
+                        prompt = WRITER_REVISION_PROMPT.format(
+                            chapter_text=chunk_text,
+                            previous_draft=json.dumps(previous_draft),
+                            critique=json.dumps(previous_critique.get("revision_notes", [])),
+                            revision_items=revision_items,
+                        )
 
                 try:
                     logger.info(f"  Writer call: chunk={chunk_idx} round={round_num} prompt_len={len(prompt)}")
                     result = await self.writer.generate_json(
-                        WRITER_SYSTEM_PROMPT,
+                        writer_system,
                         prompt,
                         temperature=0.7 if round_num == 1 else 0.5,
                         response_schema=ScreenplayDraft,
@@ -286,7 +326,7 @@ class ScreenplayPipeline:
                 else:
                     screenplay = []
 
-                screenplay = self._validate_segments(screenplay)
+                screenplay = self._validate_segments(screenplay, strip_sound_cues=is_audiobook)
 
                 # === DIRECTOR ===
                 previous_notes_section = ""
@@ -296,28 +336,37 @@ class ScreenplayPipeline:
                         f"Check whether these notes were addressed."
                     )
 
-                director_prompt = DIRECTOR_PROMPT.format(
-                    chapter_text=chunk_text,
-                    screenplay=json.dumps(screenplay),
-                    character_bible=char_bible_str,
-                    round_number=round_num,
-                    previous_notes_section=previous_notes_section,
-                )
+                if is_audiobook:
+                    director_prompt = AUDIOBOOK_DIRECTOR_PROMPT.format(
+                        chapter_text=chunk_text,
+                        screenplay=json.dumps(screenplay),
+                        character_bible=char_bible_str,
+                        round_number=round_num,
+                        previous_notes_section=previous_notes_section,
+                    )
+                else:
+                    director_prompt = DIRECTOR_PROMPT.format(
+                        chapter_text=chunk_text,
+                        screenplay=json.dumps(screenplay),
+                        character_bible=char_bible_str,
+                        round_number=round_num,
+                        previous_notes_section=previous_notes_section,
+                    )
 
                 try:
                     critique = await self.director.generate_json(
-                        DIRECTOR_SYSTEM_PROMPT,
+                        director_system,
                         director_prompt,
                         temperature=0.2,
-                        response_schema=DirectorCritique,
+                        response_schema=director_schema,
                     )
-                    critique = self._normalize_critique(critique)
+                    critique = self._normalize_critique(critique, weights)
                 except Exception as e:
                     logger.error(f"Director failed chunk {chunk_idx} round {round_num}: {e}")
-                    critique = {"scores": {k: 5 for k in self.WEIGHTS}, "revision_notes": []}
+                    critique = {"scores": {k: 5 for k in weights}, "revision_notes": []}
 
                 scores = critique.get("scores", {})
-                weighted_avg = self._calc_weighted_avg(scores)
+                weighted_avg = self._calc_weighted_avg(scores, weights)
 
                 round_result = RevisionRoundResult(
                     round_number=round_num,
@@ -336,7 +385,7 @@ class ScreenplayPipeline:
                 previous_draft = screenplay
 
                 # Early exit if quality is already excellent
-                if self._should_approve(scores, round_num):
+                if self._should_approve(scores, round_num, mode=mode, weights=weights):
                     logger.info(f"  Director approved at round {round_num} (score {weighted_avg:.2f})")
                     break
 
@@ -352,38 +401,39 @@ class ScreenplayPipeline:
             )
 
         # Aggregate scores across all best rounds
-        final_scores = {k: 0.0 for k in self.WEIGHTS}
+        final_scores = {k: 0.0 for k in weights}
         for rnd in all_rounds:
-            for k in self.WEIGHTS:
+            for k in weights:
                 final_scores[k] += rnd.scores.get(k, 5)
 
         if all_rounds:
             final_scores = {k: round(v / len(all_rounds), 1) for k, v in final_scores.items()}
         else:
-            final_scores = {k: 5.0 for k in self.WEIGHTS}
+            final_scores = {k: 5.0 for k in weights}
 
-        final_weighted_avg = self._calc_weighted_avg(final_scores)
+        final_weighted_avg = self._calc_weighted_avg(final_scores, weights)
 
-        # === SOUND DESIGNER ===
+        # === SOUND DESIGNER — radio play only, skip for audiobook ===
         sound_plan = None
-        try:
-            from .schemas import SoundPlan
-            logger.info("Running Sound Designer…")
-            # Truncate to ~first 60 segments to stay within token limits
-            # but never break mid-JSON
-            segments_for_sound = all_segments[:60]
-            sound_prompt = SOUND_DESIGNER_PROMPT.format(
-                screenplay=json.dumps(segments_for_sound),
-                chapter_text="",
-            )
-            sound_plan = await self.director.generate_json(
-                "You are a professional Sound Designer for radio play productions.",
-                sound_prompt,
-                temperature=0.3,
-                response_schema=SoundPlan,
-            )
-        except Exception as e:
-            logger.warning(f"Sound Designer skipped: {e}")
+        if not is_audiobook:
+            try:
+                from .schemas import SoundPlan
+                logger.info("Running Sound Designer…")
+                segments_for_sound = all_segments[:60]
+                sound_prompt = SOUND_DESIGNER_PROMPT.format(
+                    screenplay=json.dumps(segments_for_sound),
+                    chapter_text="",
+                )
+                sound_plan = await self.director.generate_json(
+                    "You are a professional Sound Designer for radio play productions.",
+                    sound_prompt,
+                    temperature=0.3,
+                    response_schema=SoundPlan,
+                )
+            except Exception as e:
+                logger.warning(f"Sound Designer skipped: {e}")
+        else:
+            logger.info("Sound Designer skipped — audiobook mode")
 
         return PipelineResult(
             final_screenplay=all_segments,
@@ -399,7 +449,7 @@ class ScreenplayPipeline:
     #  Helpers
     # ------------------------------------------------------------------ #
 
-    def _should_approve(self, scores: dict, round_number: int) -> bool:
+    def _should_approve(self, scores: dict, round_number: int, mode: str = "radio_play", weights: dict = None) -> bool:
         if round_number >= self.MAX_ROUNDS:
             return True
         vals = list(scores.values())
@@ -407,34 +457,44 @@ class ScreenplayPipeline:
             return False
         if min(vals) <= 3:
             return False
-        if scores.get("faithfulness", 5) < 5:
-            return False
-        weighted_avg = self._calc_weighted_avg(scores)
+        # Mode-specific minimum gates on critical criteria
+        if mode == "faithful":
+            if scores.get("text_faithfulness", 5) < 6:
+                return False
+            if scores.get("dialogue_attribution", 5) < 6:
+                return False
+        else:
+            if scores.get("faithfulness", 5) < 5:
+                return False
+        active_weights = weights if weights is not None else self.WEIGHTS
+        weighted_avg = self._calc_weighted_avg(scores, active_weights)
         if all(v >= 7 for v in vals) and weighted_avg >= settings.approval_threshold:
             return True
         if weighted_avg >= 8.0:
             return True
         return False
 
-    def _calc_weighted_avg(self, scores: dict) -> float:
+    def _calc_weighted_avg(self, scores: dict, weights: dict = None) -> float:
+        active_weights = weights if weights is not None else self.WEIGHTS
         total = 0.0
-        for key, weight in self.WEIGHTS.items():
+        for key, weight in active_weights.items():
             total += scores.get(key, 5) * weight
         return round(total, 2)
 
-    def _normalize_critique(self, critique: dict) -> dict:
+    def _normalize_critique(self, critique: dict, weights: dict = None) -> dict:
         """
-        Normalize director responses from different LLMs.
+        Normalize director responses into the canonical format.
 
-        Different LLMs use different key names:
+        Different LLMs may use different key names:
           - Gemini (schema-aware): {"scores": {"faithfulness": 7, ...}, "revision_notes": [...]}
-
           - Ollama:                 varies wildly
 
-        This normalizes all of them into the canonical format.
+        The weights dict determines which score keys are expected (radio_play vs audiobook).
         """
+        active_weights = weights if weights is not None else self.WEIGHTS
+
         if not isinstance(critique, dict):
-            return {"scores": {k: 5 for k in self.WEIGHTS}, "revision_notes": []}
+            return {"scores": {k: 5 for k in active_weights}, "revision_notes": []}
 
         # Normalize top-level "evaluation" → "scores"
         if "evaluation" in critique and "scores" not in critique:
@@ -454,11 +514,11 @@ class ScreenplayPipeline:
         if not isinstance(scores, dict):
             scores = {}
         if isinstance(scores, dict):
-            # faithfulness_to_source → faithfulness
+            # radio_play alias: faithfulness_to_source → faithfulness
             if "faithfulness_to_source" in scores and "faithfulness" not in scores:
                 scores["faithfulness"] = scores.pop("faithfulness_to_source")
             # Ensure all expected keys exist with sensible defaults
-            for k in self.WEIGHTS:
+            for k in active_weights:
                 if k not in scores:
                     scores[k] = 5
                 else:
@@ -474,7 +534,7 @@ class ScreenplayPipeline:
 
         return critique
 
-    def _validate_segments(self, segments: list) -> list[dict]:
+    def _validate_segments(self, segments: list, strip_sound_cues: bool = False) -> list[dict]:
         """Ensure all segments have required fields, extract inline [SOUND:] tags, and strip empty entries."""
         import re
         valid = []
@@ -485,6 +545,10 @@ class ScreenplayPipeline:
             if not text:
                 continue
             seg_type = seg.get("type", "narration").lower()
+
+            # Audiobook mode: drop any sound_cue the LLM generated despite instructions
+            if strip_sound_cues and seg_type == "sound_cue":
+                continue
 
             # Extract [SOUND: ...] or [SFX: ...] markers from narration/dialogue text
             # and create separate sound_cue segments
@@ -549,7 +613,6 @@ class ScreenplayPipeline:
         items = []
         for i, note in enumerate(notes, 1):
             if isinstance(note, str):
-
                 items.append(f"{i}. [MINOR] {note}")
             elif isinstance(note, dict):
                 severity = note.get("severity", "minor")
