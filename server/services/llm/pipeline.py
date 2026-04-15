@@ -128,7 +128,7 @@ class ScreenplayPipeline:
         )
 
         if is_local:
-            return await self._process_local(chunks, char_bible_str)
+            return await self._process_local(chunks, char_bible_str, mode)
         else:
             return await self._process_cloud(chunks, char_bible_str, mode)
 
@@ -140,12 +140,25 @@ class ScreenplayPipeline:
         self,
         chunks: list[str],
         char_bible_str: str,
+        mode: str = "radio_play",
     ) -> PipelineResult:
         """
         Lightweight single-pass pipeline for local Ollama models.
         Skips the Director entirely to avoid doubling slow LLM calls.
+
+        Audiobook mode is NOT supported on the local pipeline — the faithful
+        narration + dialogue-attribution task is too prompt-sensitive for small
+        local models, and silently producing radio_play output would surprise
+        the user. Fail fast with a clear message pointing to the cloud provider.
         """
         from .schemas import ScreenplayDraft
+
+        if mode == "faithful":
+            raise RuntimeError(
+                "Audiobook mode requires the cloud pipeline (Gemini). "
+                "Configure GEMINI_API_KEY, or switch the book to radio_play mode "
+                "to use the local Ollama pipeline."
+            )
 
         all_segments: list[dict] = []
         dummy_scores = {k: 5.0 for k in self.WEIGHTS}

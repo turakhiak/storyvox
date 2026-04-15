@@ -94,7 +94,7 @@ class Screenplay(Base):
     chapter_id = Column(String, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
     mode = Column(String, nullable=False)  # faithful | radio_play
     status = Column(String, default="processing")
-    audio_status = Column(String, default="none") # none | processing | complete | failed
+    audio_status = Column(String, default="none") # none | processing | complete | partial | failed
     total_rounds = Column(Integer, default=0)
     final_scores = Column(JSON, nullable=True)
     weighted_avg = Column(Float, nullable=True)

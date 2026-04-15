@@ -136,13 +136,22 @@ async def background_generate_audio(
         db.commit()
 
         processor = AudioProcessor(db)
+        # render_chapter sets screenplay.audio_status authoritatively
+        # to "complete" / "partial" / "failed" based on per-segment outcomes.
         await processor.generate_screenplay_audio(screenplay_id, force=force)
-        
-        # Reload screenplay to ensure we have it correctly
+
+        # Reload to read the status render_chapter wrote.
         screenplay = db.query(Screenplay).filter(Screenplay.id == screenplay_id).first()
-        screenplay.audio_status = "complete"
-        db.commit()
-        logger.info(f"Background audio generation complete for screenplay {screenplay_id}")
+        # Promote chapter.status only when every segment rendered cleanly.
+        if screenplay and screenplay.audio_status == "complete":
+            chapter = db.query(Chapter).filter(Chapter.id == screenplay.chapter_id).first()
+            if chapter:
+                chapter.status = "audio_ready"
+                db.commit()
+        logger.info(
+            f"Background audio generation finished for screenplay {screenplay_id} "
+            f"— status={screenplay.audio_status if screenplay else 'unknown'}"
+        )
     except Exception as e:
         logger.error(f"Background audio generation failed: {e}")
         try:

@@ -182,12 +182,18 @@ async def background_batch_process(
                         screenplay.audio_status = "processing"
                         db.commit()
                         processor = AudioProcessor(db)
+                        # render_chapter sets screenplay.audio_status authoritatively
+                        # to "complete" / "partial" / "failed" based on per-segment outcomes.
                         await processor.generate_screenplay_audio(screenplay.id, force=False)
                         screenplay = db.query(Screenplay).filter(Screenplay.id == screenplay.id).first()
-                        screenplay.audio_status = "complete"
-                        chapter.status = "audio_ready"
+                        # Only promote chapter.status if every segment rendered cleanly.
+                        # On partial/failed, chapter.status stays at "screenplay_ready".
+                        if screenplay.audio_status == "complete":
+                            chapter.status = "audio_ready"
                         db.commit()
-                        logger.info(f"  Chapter {chapter.number}: audio complete")
+                        logger.info(
+                            f"  Chapter {chapter.number}: audio {screenplay.audio_status}"
+                        )
                     except Exception as audio_err:
                         logger.error(f"  Chapter {chapter.number}: audio failed: {audio_err}")
                         screenplay.audio_status = "failed"

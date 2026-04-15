@@ -26,9 +26,15 @@ class AudioRenderAgent:
         """
         Processes an entire chapter, generating all necessary audio assets.
         Differentiates between dialogue (TTS) and sound cues (SFX).
+
+        Authoritatively sets `screenplay.audio_status` based on outcome:
+          - "complete" — every segment that needed audio produced an audio_url
+          - "partial"  — some segments rendered, others failed
+          - "failed"   — nothing rendered at all
+        Callers should NOT override this value on success — trust what we set.
         """
         import asyncio
-        
+
         screenplay = self.db.query(Screenplay).filter(Screenplay.id == screenplay_id).first()
         if not screenplay:
             raise ValueError(f"Screenplay {screenplay_id} not found")
@@ -52,13 +58,19 @@ class AudioRenderAgent:
 
         semaphore = asyncio.Semaphore(5)  # Moderate concurrency for gTTS/Azure REST (no WebSocket limits)
 
+        # Track per-segment outcomes. "skipped" = already had audio and not forced.
+        succeeded: list[str] = []
+        failed: list[tuple[str, str]] = []  # (segment_id, error_message)
+        skipped: list[str] = []
+
         async def render_segment(seg: ScreenplaySegment):
             if seg.audio_url and not force:
+                skipped.append(seg.id)
                 return
 
             async with semaphore:
                 filename = f"{screenplay_id}_{seg.order_index}.mp3"
-                
+
                 try:
                     if seg.type == "sound_cue":
                         # Try Freesound first — falls back to narrator TTS if no key / no match
@@ -86,7 +98,7 @@ class AudioRenderAgent:
                         gender = "narrator"
                         age = "adult"
                         personality = []
-                        
+
                         if seg.type == "dialogue" and seg.character_name:
                             char = char_map.get(seg.character_name.lower())
                             if char:
@@ -94,7 +106,7 @@ class AudioRenderAgent:
                                 gender = char.gender.lower() if char.gender else "narrator"
                                 age = char.age_range.lower() if char.age_range else "adult"
                                 personality = char.personality or []
-                        
+
                         await self.tts.generate_audio(
                             text=seg.text,
                             filename=filename,
@@ -104,13 +116,47 @@ class AudioRenderAgent:
                             personality=personality
                         )
                         seg.audio_url = f"/static/audio/{filename}"
-                        
+
+                    # If we got here without an audio_url, count as failed — the TTS / SFX
+                    # call didn't raise but also didn't produce a file.
+                    if seg.audio_url:
+                        succeeded.append(seg.id)
+                    else:
+                        failed.append((seg.id, "no audio_url produced"))
+
                 except Exception as e:
                     logger.error(f"❌ Render Agent failed on segment {seg.id}: {e}")
+                    failed.append((seg.id, f"{type(e).__name__}: {e}"))
 
-        # Run all renders in parallel
-        await asyncio.gather(*(render_segment(seg) for seg in segments))
+        # Run all renders in parallel. Each task catches its own exceptions, so gather
+        # will not raise — but we pass return_exceptions=True defensively in case a task
+        # ever escapes its try/except.
+        await asyncio.gather(*(render_segment(seg) for seg in segments), return_exceptions=True)
 
+        # Decide the authoritative audio_status based on outcomes.
+        total_needed = len(segments) - len(skipped)
+        if total_needed == 0:
+            # Nothing actually needed rendering (all already had audio and force=False)
+            new_status = "complete"
+        elif len(failed) == 0:
+            new_status = "complete"
+        elif len(succeeded) == 0:
+            new_status = "failed"
+        else:
+            new_status = "partial"
+
+        screenplay.audio_status = new_status
         self.db.commit()
-        logger.info(f"✅ AUDIO RENDER AGENT: Render complete for Screenplay {screenplay_id}")
+
+        if failed:
+            sample = failed[:3]
+            logger.warning(
+                f"⚠️  Render finished with {len(failed)} failed / {len(succeeded)} ok / "
+                f"{len(skipped)} skipped — status={new_status}. First failures: {sample}"
+            )
+        else:
+            logger.info(
+                f"✅ Render complete — {len(succeeded)} ok, {len(skipped)} skipped, status={new_status}"
+            )
+
         return screenplay
