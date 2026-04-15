@@ -404,6 +404,11 @@ async def batch_status(
             "status": ch.status,
             "screenplay_status": screenplay.status if screenplay else None,
             "audio_status": screenplay.audio_status if screenplay else None,
+            # Emit the mode the existing screenplay was generated in. The UI
+            # needs this to pick the right mode when calling generateAudio —
+            # otherwise a user viewing in "radio_play" who actually generated
+            # audiobook content would hit a 404 on audio-regen.
+            "screenplay_mode": screenplay.mode if screenplay else None,
             "score": screenplay.weighted_avg if screenplay else None,
             "is_non_story": is_non_story_chapter(ch, book.total_chapters),
         })

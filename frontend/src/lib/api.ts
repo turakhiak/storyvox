@@ -56,6 +56,11 @@ export interface ChapterStatus {
   status: string;
   screenplay_status: string | null;
   audio_status: string | null;
+  // Mode the existing screenplay was generated in ("radio_play" | "faithful").
+  // Null when no screenplay exists yet. The UI uses this to call audio-regen
+  // with the right mode even when the user has the Production tab toggled to
+  // the opposite mode.
+  screenplay_mode: string | null;
   score: number | null;
   is_non_story?: boolean;
 }

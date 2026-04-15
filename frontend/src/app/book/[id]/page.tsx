@@ -12,7 +12,7 @@ import {
   getBook, getChapters, getCharacters, detectCharacters,
   updateCharacterVoice, getVoices, getBatchStatus, batchGenerate,
   stopBatch, resetBatch, updateBookmark, getScreenplay, getRevisions,
-  getCoverUrl, formatWordCount, formatDuration,
+  generateAudio, getCoverUrl, formatWordCount, formatDuration,
 } from "@/lib/api";
 import type { Book, Chapter, Character, Voice, BatchStatus, ChapterStatus, Screenplay, RevisionRound, ScreenplaySegment } from "@/lib/api";
 
@@ -524,6 +524,48 @@ function ProductionTab({
     }
   };
 
+  // Audio-only regeneration for a single chapter.
+  //
+  // Needed after an ephemeral-disk wipe (or any time audio goes missing but
+  // the screenplay is intact): the screenplay is DB-only so it's still
+  // there, but the .mp3 files are gone. This calls the existing audio
+  // endpoint with the mode the screenplay was generated in (not necessarily
+  // `batchMode`), then polls batch status until the audio_status moves off
+  // "processing".
+  const [audioGenChapterId, setAudioGenChapterId] = useState<string | null>(null);
+  const handleGenerateAudio = async (chapter: Chapter, mode: string, force: boolean) => {
+    setAudioGenChapterId(chapter.id);
+    setError(null);
+    try {
+      await generateAudio(chapter.id, mode, force);
+      // Kick status refresh immediately; the polling effect picks it up.
+      await fetchStatus();
+    } catch (e: any) {
+      setError(e.message);
+      setAudioGenChapterId(null);
+    }
+  };
+
+  // Poll batch status every 3s while a single-chapter audio regen is in
+  // flight (batchGenerate's poll only runs during a full batch, so we need
+  // our own). Clear the per-chapter spinner once audio_status leaves
+  // "processing" — whether it ended up complete, partial, or failed.
+  useEffect(() => {
+    if (!audioGenChapterId) return;
+    const cs = (batchStatus?.chapters || []).find((c) => c.chapter_id === audioGenChapterId);
+    if (cs && cs.audio_status !== "processing") {
+      setAudioGenChapterId(null);
+      if (cs.audio_status === "failed") {
+        setError("Audio regeneration failed. Check server logs, then retry.");
+      } else if (cs.audio_status === "partial") {
+        setError("Audio regenerated with some failures — try again to retry the missing segments.");
+      }
+      return;
+    }
+    const interval = setInterval(fetchStatus, 3000);
+    return () => clearInterval(interval);
+  }, [audioGenChapterId, batchStatus]);
+
   if (!hasCharacters) {
     return (
       <div className="text-center py-16">
@@ -835,6 +877,42 @@ function ProductionTab({
                   >
                     <RefreshCw className="w-3 h-3" />
                     Retry
+                  </button>
+                )}
+
+                {/* Audio-only (re)generate button.
+                    Shows whenever the screenplay is complete — either audio
+                    is missing ("Generate Audio") or already exists
+                    ("Regenerate"). Uses the screenplay's own mode so it
+                    works even if the user's Production toggle is set to
+                    the opposite mode. */}
+                {screenplayDone && !isProcessing && !isCurrentlyProcessing && (
+                  <button
+                    onClick={() => handleGenerateAudio(
+                      ch,
+                      cs?.screenplay_mode || batchMode,
+                      audioDone,  // force=true only if already complete (i.e. regen)
+                    )}
+                    disabled={audioGenChapterId === ch.id}
+                    className={cn(
+                      "text-xs font-ui px-3 py-1 rounded-lg transition-all flex items-center gap-1",
+                      audioDone
+                        ? "bg-ink-100 dark:bg-ink-800 text-ink-600 dark:text-ink-300 hover:bg-ink-200 dark:hover:bg-ink-700"
+                        : "bg-stage-green/10 text-stage-green hover:bg-stage-green hover:text-white"
+                    )}
+                    title={audioDone ? "Regenerate audio for this chapter" : "Generate audio for this chapter"}
+                  >
+                    {audioGenChapterId === ch.id ? (
+                      <>
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        {audioDone ? <RefreshCw className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+                        {audioDone ? "Regen Audio" : "Generate Audio"}
+                      </>
+                    )}
                   </button>
                 )}
               </div>
