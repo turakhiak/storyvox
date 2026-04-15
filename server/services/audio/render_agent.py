@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import List, Dict, Any
+from typing import Any
 from sqlalchemy.orm import Session
 from models.database import Screenplay, ScreenplaySegment, Character
 from services.tts.service import TTSService
@@ -32,6 +32,14 @@ class AudioRenderAgent:
           - "partial"  — some segments rendered, others failed
           - "failed"   — nothing rendered at all
         Callers should NOT override this value on success — trust what we set.
+
+        Session safety: ORM instances are only read/written on the main task.
+        The concurrent phase operates on plain-dict "render plans" and produces
+        plain-dict "outcomes" — zero SQLAlchemy access inside the gather. This
+        is defensive: asyncio is single-threaded so atomic attribute writes
+        would technically be safe, but any future lazy-loaded relationship or
+        autoflush-triggering query inside a task would silently break under
+        load. Isolating the concurrent phase removes the whole class of hazard.
         """
         import asyncio
 
@@ -56,33 +64,56 @@ class AudioRenderAgent:
         # if screenplay.sound_plan:
         #    await self._process_sound_plan(screenplay.sound_plan, screenplay_id)
 
+        # ──────────────────────────────────────────────────────────────────
+        # Phase 1 (main task) — build plain-dict render plans from the ORM.
+        # Every value we'll need inside a concurrent task is resolved here,
+        # so the concurrent phase never touches SQLAlchemy.
+        # ──────────────────────────────────────────────────────────────────
+        render_plans: list[dict[str, Any]] = []
+        for seg in segments:
+            plan: dict[str, Any] = {
+                "seg_id": seg.id,
+                "order_index": seg.order_index,
+                "type": seg.type,
+                "text": seg.text or "",
+                "already_has_audio": bool(seg.audio_url),
+                # TTS parameters — defaults for narration / sound-cue narrator fallback
+                "voice": None,
+                "gender": "narrator",
+                "age": "adult",
+                "personality": [],
+            }
+            if seg.type == "dialogue" and seg.character_name:
+                char = char_map.get(seg.character_name.lower())
+                if char:
+                    plan["voice"] = char.voice_id
+                    plan["gender"] = (char.gender or "narrator").lower()
+                    plan["age"] = (char.age_range or "adult").lower()
+                    plan["personality"] = char.personality or []
+            render_plans.append(plan)
+
         semaphore = asyncio.Semaphore(5)  # Moderate concurrency for gTTS/Azure REST (no WebSocket limits)
 
-        # Track per-segment outcomes. "skipped" = already had audio and not forced.
-        succeeded: list[str] = []
-        failed: list[tuple[str, str]] = []  # (segment_id, error_message)
-        skipped: list[str] = []
-
-        async def render_segment(seg: ScreenplaySegment):
-            if seg.audio_url and not force:
-                skipped.append(seg.id)
-                return
+        # ──────────────────────────────────────────────────────────────────
+        # Phase 2 (concurrent) — render each segment. Produces plain-dict
+        # outcomes only. No ORM access whatsoever.
+        # ──────────────────────────────────────────────────────────────────
+        async def render_segment(plan: dict[str, Any]) -> dict[str, Any]:
+            if plan["already_has_audio"] and not force:
+                return {"seg_id": plan["seg_id"], "status": "skipped"}
 
             async with semaphore:
-                filename = f"{screenplay_id}_{seg.order_index}.mp3"
-
+                filename = f"{screenplay_id}_{plan['order_index']}.mp3"
                 try:
-                    if seg.type == "sound_cue":
+                    if plan["type"] == "sound_cue":
                         # Try Freesound first — falls back to narrator TTS if no key / no match
                         sfx_path = await self.sfx.generate_sfx(
-                            description=seg.text.strip().rstrip("."),
+                            description=plan["text"].strip().rstrip("."),
                             filename=filename,
                         )
-                        if sfx_path:
-                            seg.audio_url = f"/static/audio/{filename}"
-                        else:
+                        if not sfx_path:
                             # Fallback: narrator reads the sound description aloud
-                            stage_text = seg.text.strip().rstrip(".")
+                            stage_text = plan["text"].strip().rstrip(".")
                             await self.tts.generate_audio(
                                 text=stage_text,
                                 filename=filename,
@@ -90,48 +121,79 @@ class AudioRenderAgent:
                                 age="adult",
                                 personality=["formal", "stoic"],
                             )
-                            seg.audio_url = f"/static/audio/{filename}"
+                        url = f"/static/audio/{filename}"
 
-                    elif seg.type in ["dialogue", "narration"]:
-                        # ROUTE TO TTS SERVICE
-                        voice = None
-                        gender = "narrator"
-                        age = "adult"
-                        personality = []
-
-                        if seg.type == "dialogue" and seg.character_name:
-                            char = char_map.get(seg.character_name.lower())
-                            if char:
-                                voice = char.voice_id
-                                gender = char.gender.lower() if char.gender else "narrator"
-                                age = char.age_range.lower() if char.age_range else "adult"
-                                personality = char.personality or []
-
+                    elif plan["type"] in ("dialogue", "narration"):
                         await self.tts.generate_audio(
-                            text=seg.text,
+                            text=plan["text"],
                             filename=filename,
-                            voice=voice,
-                            gender=gender,
-                            age=age,
-                            personality=personality
+                            voice=plan["voice"],
+                            gender=plan["gender"],
+                            age=plan["age"],
+                            personality=plan["personality"],
                         )
-                        seg.audio_url = f"/static/audio/{filename}"
+                        url = f"/static/audio/{filename}"
 
-                    # If we got here without an audio_url, count as failed — the TTS / SFX
-                    # call didn't raise but also didn't produce a file.
-                    if seg.audio_url:
-                        succeeded.append(seg.id)
                     else:
-                        failed.append((seg.id, "no audio_url produced"))
+                        return {
+                            "seg_id": plan["seg_id"],
+                            "status": "failed",
+                            "error": f"unknown segment type: {plan['type']!r}",
+                        }
+
+                    return {"seg_id": plan["seg_id"], "status": "succeeded", "url": url}
 
                 except Exception as e:
-                    logger.error(f"❌ Render Agent failed on segment {seg.id}: {e}")
-                    failed.append((seg.id, f"{type(e).__name__}: {e}"))
+                    return {
+                        "seg_id": plan["seg_id"],
+                        "status": "failed",
+                        "error": f"{type(e).__name__}: {e}",
+                    }
 
-        # Run all renders in parallel. Each task catches its own exceptions, so gather
-        # will not raise — but we pass return_exceptions=True defensively in case a task
-        # ever escapes its try/except.
-        await asyncio.gather(*(render_segment(seg) for seg in segments), return_exceptions=True)
+        # Each task catches its own exceptions, but return_exceptions=True is defensive
+        # in case something escapes (e.g., asyncio.CancelledError). Escaped exceptions
+        # are handled below.
+        results = await asyncio.gather(
+            *(render_segment(p) for p in render_plans),
+            return_exceptions=True,
+        )
+
+        # ──────────────────────────────────────────────────────────────────
+        # Phase 3 (main task) — write back audio_url to ORM instances and
+        # compute the authoritative status. All SQLAlchemy work happens here.
+        # ──────────────────────────────────────────────────────────────────
+        seg_by_id = {s.id: s for s in segments}
+        succeeded: list[str] = []
+        failed: list[tuple[str, str]] = []  # (segment_id, error_message)
+        skipped: list[str] = []
+
+        for result in results:
+            if isinstance(result, BaseException):
+                # A task escaped its try/except — shouldn't happen, but log it so the
+                # render isn't silently marked complete on an unaccounted-for failure.
+                logger.error(
+                    f"Render task escaped its try/except: {type(result).__name__}: {result}"
+                )
+                failed.append(("unknown", f"{type(result).__name__}: {result}"))
+                continue
+
+            seg_id = result["seg_id"]
+            status = result["status"]
+
+            if status == "skipped":
+                skipped.append(seg_id)
+            elif status == "succeeded":
+                seg = seg_by_id.get(seg_id)
+                if seg is None:
+                    # The segment row vanished between our query and now — unusual
+                    failed.append((seg_id, "segment no longer exists"))
+                else:
+                    seg.audio_url = result["url"]
+                    succeeded.append(seg_id)
+            else:  # "failed"
+                error = result.get("error", "unknown error")
+                logger.error(f"❌ Render Agent failed on segment {seg_id}: {error}")
+                failed.append((seg_id, error))
 
         # Decide the authoritative audio_status based on outcomes.
         total_needed = len(segments) - len(skipped)
