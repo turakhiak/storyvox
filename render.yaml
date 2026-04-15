@@ -22,7 +22,26 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
-    plan: free
+    plan: starter
+    # Persistent disk — required because covers, audio, and uploaded epub/pdf
+    # files live on disk. Without this, every deploy wipes them all and the
+    # DB ends up pointing at /static/covers/*.jpg and /static/audio/*.mp3
+    # URLs that 404.
+    #
+    # Mount path matches where `settings.upload_dir = "./uploads"` resolves
+    # at runtime: rootDir is `server`, so Python's CWD is
+    # `/opt/render/project/src/server/` and `./uploads` resolves there.
+    #
+    # The app still has two defensive guards in case a file goes missing
+    # for unrelated reasons (manual cleanup, disk full at write time):
+    #   1. routers/screenplay.py::_detect_stale_audio scrubs stale
+    #      /static/audio URLs on GET.
+    #   2. services/audio/render_agent.py re-checks disk existence before
+    #      skipping a segment, so regenerate-without-force still works.
+    disk:
+      name: storyvox-uploads
+      mountPath: /opt/render/project/src/server/uploads
+      sizeGB: 5
 
 databases:
   - name: storyvox-db

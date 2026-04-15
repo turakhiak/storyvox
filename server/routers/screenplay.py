@@ -3,6 +3,7 @@ Screenplay API — trigger Writer/Director pipeline, get results.
 """
 import json
 import logging
+import os
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 
@@ -213,6 +214,52 @@ async def generate_screenplay(
     return screenplay
 
 
+def _detect_stale_audio(screenplay: Screenplay, db: Session) -> None:
+    """
+    Render's free plan has no persistent disk — after a restart, all files under
+    `./uploads/audio` are gone, but the DB still thinks audio is "complete".
+    Before serving the screenplay to the frontend, sample a few segments and if
+    their audio files no longer exist on disk, downgrade `audio_status` to
+    "none" and null out the stale `audio_url`s. That way the UI shows the
+    "Generate Audio" button instead of Play buttons that 404.
+
+    Sampling (not exhaustive) keeps this cheap on hot GET requests. If the
+    sample is gone, the whole batch is almost certainly gone too — and the
+    user can regenerate with one click. If only some files are missing
+    (extremely rare), the next render run will catch them via render_agent's
+    file-existence check.
+    """
+    if screenplay.audio_status not in ("complete", "partial"):
+        return
+
+    audio_dir = os.path.join(settings.upload_dir, "audio")
+    segments_with_audio = [s for s in screenplay.segments if s.audio_url]
+    if not segments_with_audio:
+        return
+
+    # Check first + last + middle — cheap spot-check that catches a wiped disk
+    sample_idxs = {0, len(segments_with_audio) // 2, len(segments_with_audio) - 1}
+    missing = 0
+    for i in sample_idxs:
+        seg = segments_with_audio[i]
+        if seg.audio_url.startswith("/static/audio/"):
+            fname = os.path.basename(seg.audio_url)
+            if not os.path.exists(os.path.join(audio_dir, fname)):
+                missing += 1
+
+    if missing == len(sample_idxs):
+        # Every sampled file is gone — treat as a full wipe and clear all URLs
+        logger.warning(
+            f"Screenplay {screenplay.id}: audio files missing on disk "
+            f"(ephemeral wipe?) — downgrading audio_status to 'none'"
+        )
+        for seg in screenplay.segments:
+            if seg.audio_url and seg.audio_url.startswith("/static/audio/"):
+                seg.audio_url = None
+        screenplay.audio_status = "none"
+        db.commit()
+
+
 @router.get("", response_model=ScreenplayResponse)
 async def get_screenplay(
     chapter_id: str,
@@ -227,6 +274,7 @@ async def get_screenplay(
     )
     if not screenplay:
         raise HTTPException(404, "Screenplay not found. Generate it first.")
+    _detect_stale_audio(screenplay, db)
     return screenplay
 
 

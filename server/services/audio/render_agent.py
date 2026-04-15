@@ -71,12 +71,25 @@ class AudioRenderAgent:
         # ──────────────────────────────────────────────────────────────────
         render_plans: list[dict[str, Any]] = []
         for seg in segments:
+            # Ephemeral-filesystem guard: on Render's free plan (no persistent disk),
+            # `./uploads/audio` is wiped on every restart. A segment can have
+            # `audio_url` set in the DB but point at a vanished file. Treat those as
+            # missing so the render regenerates them without needing force=True.
+            has_audio = False
+            if seg.audio_url:
+                if seg.audio_url.startswith("/static/audio/"):
+                    fname = os.path.basename(seg.audio_url)
+                    has_audio = os.path.exists(os.path.join(self.audio_dir, fname))
+                else:
+                    # Unknown URL scheme (e.g. future R2/S3) — trust the DB
+                    has_audio = True
+
             plan: dict[str, Any] = {
                 "seg_id": seg.id,
                 "order_index": seg.order_index,
                 "type": seg.type,
                 "text": seg.text or "",
-                "already_has_audio": bool(seg.audio_url),
+                "already_has_audio": has_audio,
                 # TTS parameters — defaults for narration / sound-cue narrator fallback
                 "voice": None,
                 "gender": "narrator",

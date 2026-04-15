@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from models.database import init_db, get_db, Book
-from routers import books, characters, screenplay, batch
+from routers import books, characters, screenplay, batch, maintenance
 from routers.characters import voices_router
 
 logging.basicConfig(level=logging.INFO)
@@ -84,6 +84,7 @@ app.include_router(books.router)
 app.include_router(characters.router)
 app.include_router(screenplay.router)
 app.include_router(batch.router)
+app.include_router(maintenance.router)
 app.include_router(voices_router)
 
 
