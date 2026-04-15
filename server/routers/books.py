@@ -149,6 +149,89 @@ async def update_bookmark(book_id: str, chapter_num: int = Query(...), db: Sessi
     return {"book_id": book_id, "listen_bookmark": chapter_num}
 
 
+@router.post("/{book_id}/refresh-cover", response_model=BookResponse)
+async def refresh_cover(book_id: str, db: Session = Depends(get_db)):
+    """
+    Re-fetch the book's cover image.
+
+    Strategy:
+      1. If the original epub/pdf is still on disk, re-parse and re-extract
+         the embedded cover. This is the highest-fidelity option.
+      2. Otherwise (e.g. pre-persistent-disk book, file lost), query the
+         OpenLibrary cover API by title + author and download that.
+      3. If both fail, return the book unchanged with an explanatory log.
+
+    Persistent on disk, so subsequent deploys don't wipe the refreshed cover
+    (as long as the Render disk stays attached).
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(404, "Book not found")
+
+    new_cover_url: str | None = None
+
+    # Strategy 1 — re-parse the source file if we still have it
+    if book.epub_path and os.path.exists(book.epub_path):
+        try:
+            fmt = "pdf" if book.epub_path.lower().endswith(".pdf") else "epub"
+            parsed = parse_pdf(book.epub_path) if fmt == "pdf" else parse_epub(book.epub_path)
+            if parsed.cover_data:
+                new_cover_url = save_cover(parsed.cover_data, parsed.cover_ext, settings.upload_dir)
+                log.info(f"refresh_cover: re-extracted from local {fmt} for book {book_id}")
+        except Exception as e:
+            log.warning(f"refresh_cover: local re-parse failed for {book_id}: {e}")
+
+    # Strategy 2 — OpenLibrary fallback (no auth, no key needed)
+    if not new_cover_url:
+        try:
+            import httpx
+            # Search by title + author to find the most relevant edition
+            params = {"title": book.title, "limit": 1}
+            if book.author and book.author.lower() != "unknown":
+                params["author"] = book.author
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get("https://openlibrary.org/search.json", params=params)
+                r.raise_for_status()
+                data = r.json()
+                docs = data.get("docs", [])
+                cover_id = docs[0].get("cover_i") if docs else None
+
+                if cover_id:
+                    # Large cover — Open Library's "-L.jpg" variant
+                    img_url = f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
+                    img_r = await client.get(img_url)
+                    img_r.raise_for_status()
+                    if img_r.content and len(img_r.content) > 1024:  # skip placeholder 1x1 images
+                        new_cover_url = save_cover(img_r.content, "jpg", settings.upload_dir)
+                        log.info(f"refresh_cover: fetched OpenLibrary cover_id={cover_id} for book {book_id}")
+        except Exception as e:
+            log.warning(f"refresh_cover: OpenLibrary lookup failed for {book_id}: {e}")
+
+    if not new_cover_url:
+        raise HTTPException(
+            404,
+            "Could not refresh cover — original file is missing and OpenLibrary has no match for this title/author.",
+        )
+
+    # Delete old cover file if we know where it is (best-effort)
+    if book.cover_url and book.cover_url.startswith("/static/covers/"):
+        old_path = os.path.join(settings.upload_dir, "covers", os.path.basename(book.cover_url))
+        try:
+            if os.path.exists(old_path):
+                os.remove(old_path)
+        except OSError:
+            pass
+
+    book.cover_url = new_cover_url
+    db.commit()
+    db.refresh(book)
+    return book
+
+
 @router.delete("/{book_id}")
 async def delete_book(book_id: str, db: Session = Depends(get_db)):
     """Delete a book and ALL associated data — epub, cover, audio, screenplays, characters."""

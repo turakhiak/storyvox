@@ -14,6 +14,7 @@ import {
   generateAudio,
 } from "@/lib/api";
 import type { Book, Chapter, Character, Screenplay, RevisionRound, ScreenplaySegment } from "@/lib/api";
+import { useLibraryStore } from "@/store/library";
 
 const CRITERIA_LABELS: Record<string, string> = {
   // Radio play criteria
@@ -519,6 +520,7 @@ function SegmentCard({
 }) {
   const [localPlaying, setLocalPlaying] = useState(false);
   const audioRef = useState<HTMLAudioElement | null>(null)[0];
+  const ttsSpeed = useLibraryStore((s) => s.ttsSpeed);
   const color = segment.character_name ? charColorMap[segment.character_name] : undefined;
 
   useEffect(() => {
@@ -544,6 +546,7 @@ function SegmentCard({
     }
 
     const audio = new Audio(url);
+    audio.playbackRate = ttsSpeed;  // honor the global TTS speed pref
     setLocalPlaying(true);
     audio.play().catch(e => {
       console.error("Playback failed:", e);

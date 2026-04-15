@@ -5,7 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, BookOpen, Users, Sparkles, Play, FileText, Square,
   ChevronRight, Loader2, Mic, Brain, Radio, Clock,
-  RefreshCw, CheckCircle2, AlertCircle, Volume2, Headphones, Pencil
+  RefreshCw, CheckCircle2, AlertCircle, Volume2, Headphones, Pencil,
+  Wand2, X
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -15,6 +16,7 @@ import {
   generateAudio, getCoverUrl, formatWordCount, formatDuration,
 } from "@/lib/api";
 import type { Book, Chapter, Character, Voice, BatchStatus, ChapterStatus, Screenplay, RevisionRound, ScreenplaySegment } from "@/lib/api";
+import { useLibraryStore } from "@/store/library";
 
 type Tab = "chapters" | "characters" | "voices" | "production" | "screenplay" | "audio";
 
@@ -52,13 +54,17 @@ export default function BookPage() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
   const [voices, setVoices] = useState<Voice[]>([]);
-  const [activeTab, setActiveTab] = useState<Tab>("chapters");
+  const [activeTab, setActiveTab] = useState<Tab>("production");
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Lifted from ProductionTab so Screenplay + Audio tabs can see the selected mode
   const [batchMode, setBatchMode] = useState<"radio_play" | "faithful">("radio_play");
   // Shows a "server is waking up" hint after 12s — matches the first retry delay
   const [warming, setWarming] = useState(false);
+  // Studio mode hides production/screenplay/audio tabs by default. A normal
+  // reader just sees hero + chapter list. Power users click "Studio" in the
+  // nav to reveal characters / voices / production / screenplay / audio.
+  const [studioMode, setStudioMode] = useState(false);
 
   // Show "connecting…" hint if the book hasn't loaded after 8s
   useEffect(() => {
@@ -124,15 +130,35 @@ export default function BookPage() {
     <div className="min-h-screen">
       {/* Top bar */}
       <nav className="border-b border-ink-200/20 dark:border-ink-800/40 bg-surface-light/80 dark:bg-surface-dark/80 backdrop-blur-xl sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center gap-4">
-          <button onClick={() => router.push("/")} className="btn-ghost flex items-center gap-2">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center gap-2 sm:gap-4">
+          <button
+            onClick={() => router.push("/")}
+            className="btn-ghost flex items-center gap-1.5 sm:gap-2 min-h-[44px] px-2 sm:px-3"
+            aria-label="Back to library"
+          >
             <ArrowLeft className="w-4 h-4" />
-            Library
+            <span className="hidden sm:inline">Library</span>
           </button>
-          <div className="h-6 w-px bg-ink-200 dark:bg-ink-800" />
-          <h1 className="font-display font-semibold text-ink-900 dark:text-ink-100 truncate">
+          <div className="h-6 w-px bg-ink-200 dark:bg-ink-800 hidden sm:block" />
+          <h1 className="font-display font-semibold text-ink-900 dark:text-ink-100 truncate flex-1 text-sm sm:text-base">
             {book.title}
           </h1>
+          {/* Studio toggle — power-user entry into the generation pipeline.
+              In reader mode it shows "Studio" with a wand; in studio mode it
+              shows "Close" so the user knows how to get back to the calm view. */}
+          <button
+            onClick={() => setStudioMode((s) => !s)}
+            className={cn(
+              "flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 min-h-[44px] rounded-xl font-ui text-xs sm:text-sm font-medium transition-all flex-shrink-0",
+              studioMode
+                ? "bg-ink-100 dark:bg-ink-800 text-ink-700 dark:text-ink-300 hover:bg-ink-200 dark:hover:bg-ink-700"
+                : "bg-amber-warm/15 text-amber-warm hover:bg-amber-warm hover:text-ink-950"
+            )}
+            title={studioMode ? "Hide production tools" : "Open the production studio"}
+          >
+            {studioMode ? <X className="w-4 h-4" /> : <Wand2 className="w-4 h-4" />}
+            <span>{studioMode ? "Close" : "Studio"}</span>
+          </button>
         </div>
       </nav>
 
@@ -145,11 +171,12 @@ export default function BookPage() {
         </div>
       )}
 
-      {/* Book hero */}
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <div className="flex gap-8 items-start">
-          {/* Cover */}
-          <div className="hidden md:block w-48 flex-shrink-0">
+      {/* Book hero — mobile stacks cover above text; sm+ keeps side-by-side. */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <div className="flex flex-col sm:flex-row gap-5 sm:gap-8 items-start">
+          {/* Cover — visible on mobile too (smaller). Was hidden md:block;
+              dropping a cover on mobile loses too much identity. */}
+          <div className="w-32 sm:w-40 md:w-48 flex-shrink-0 mx-auto sm:mx-0">
             <div className="aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl shadow-ink-950/20 dark:shadow-ink-950/50">
               {coverUrl ? (
                 <img src={coverUrl} alt={book.title} className="w-full h-full object-cover" />
@@ -162,120 +189,154 @@ export default function BookPage() {
           </div>
 
           {/* Info */}
-          <div className="flex-1 min-w-0">
-            <h2 className="font-display text-4xl font-bold text-ink-950 dark:text-ink-50 leading-tight">
+          <div className="flex-1 min-w-0 w-full">
+            <h2 className="font-display text-2xl sm:text-3xl md:text-4xl font-bold text-ink-950 dark:text-ink-50 leading-tight">
               {book.title}
             </h2>
-            <p className="font-ui text-lg text-ink-500 dark:text-ink-400 mt-2">
+            <p className="font-ui text-base sm:text-lg text-ink-500 dark:text-ink-400 mt-1 sm:mt-2">
               by {book.author}
             </p>
 
             {book.description && (
-              <p className="font-body text-ink-600 dark:text-ink-400 mt-4 line-clamp-3 max-w-2xl leading-relaxed">
+              <p className="font-body text-ink-600 dark:text-ink-400 mt-3 sm:mt-4 line-clamp-3 max-w-2xl leading-relaxed text-sm sm:text-base">
                 {book.description}
               </p>
             )}
 
             {/* Stats */}
-            <div className="flex flex-wrap gap-6 mt-6">
+            <div className="flex flex-wrap gap-x-4 gap-y-2 sm:gap-6 mt-4 sm:mt-6">
               <Stat icon={<FileText className="w-4 h-4" />} label="Chapters" value={book.total_chapters} />
               <Stat icon={<BookOpen className="w-4 h-4" />} label="Words" value={formatWordCount(book.total_words)} />
               <Stat icon={<Clock className="w-4 h-4" />} label="Est. Listen" value={formatDuration(book.total_words)} />
               <Stat icon={<Users className="w-4 h-4" />} label="Characters" value={characters.length || "—"} />
             </div>
 
-            {/* Actions */}
-            <div className="flex flex-wrap gap-3 mt-8">
-              <button onClick={handleDetectCharacters} className="btn-primary flex items-center gap-2" disabled={detecting}>
-                {detecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
-                {detecting ? "Detecting..." : characters.length > 0 ? "Re-detect Characters" : "Detect Characters"}
-              </button>
-              {chapters.length > 0 && (
-                <button
-                  onClick={() => router.push(`/book/${id}/read/1`)}
-                  className="btn-ghost flex items-center gap-2"
-                >
-                  <BookOpen className="w-4 h-4" />
-                  Start Reading
-                </button>
+            {/* Actions — different in reader vs studio mode.
+                Reader: just "Start Reading" (the dominant action for a normal user).
+                Studio: production-ish actions (detect characters, jump to reader). */}
+            <div className="flex flex-wrap gap-3 mt-6 sm:mt-8">
+              {!studioMode ? (
+                chapters.length > 0 && (
+                  <button
+                    onClick={() => router.push(`/book/${id}/read/${(book.listen_bookmark || 0) + 1 <= chapters.length ? (book.listen_bookmark || 0) + 1 : 1}`)}
+                    className="btn-primary flex items-center gap-2 min-h-[44px]"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    {book.listen_bookmark && book.listen_bookmark > 0 ? `Continue · Ch. ${book.listen_bookmark + 1}` : "Start Reading"}
+                  </button>
+                )
+              ) : (
+                <>
+                  <button onClick={handleDetectCharacters} className="btn-primary flex items-center gap-2 min-h-[44px]" disabled={detecting}>
+                    {detecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
+                    {detecting ? "Detecting..." : characters.length > 0 ? "Re-detect Characters" : "Detect Characters"}
+                  </button>
+                  {chapters.length > 0 && (
+                    <button
+                      onClick={() => router.push(`/book/${id}/read/1`)}
+                      className="btn-ghost flex items-center gap-2 min-h-[44px]"
+                    >
+                      <BookOpen className="w-4 h-4" />
+                      Open Reader
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="max-w-7xl mx-auto px-6">
-        <div className="flex gap-1 border-b border-ink-200/30 dark:border-ink-800/30 overflow-x-auto">
-          {(["chapters", "characters", "voices", "production", "screenplay", "audio"] as Tab[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                "px-5 py-3 font-ui text-sm font-medium whitespace-nowrap capitalize transition-all duration-200 border-b-2 -mb-px",
-                activeTab === tab
-                  ? "border-amber-warm text-amber-warm"
-                  : "border-transparent text-ink-500 dark:text-ink-400 hover:text-ink-700 dark:hover:text-ink-200"
-              )}
-            >
-              {tab === "chapters" && <FileText className="w-4 h-4 inline mr-2 -mt-0.5" />}
-              {tab === "characters" && <Users className="w-4 h-4 inline mr-2 -mt-0.5" />}
-              {tab === "voices" && <Volume2 className="w-4 h-4 inline mr-2 -mt-0.5" />}
-              {tab === "production" && <Radio className="w-4 h-4 inline mr-2 -mt-0.5" />}
-              {tab === "screenplay" && <Pencil className="w-4 h-4 inline mr-2 -mt-0.5" />}
-              {tab === "audio" && <Headphones className="w-4 h-4 inline mr-2 -mt-0.5" />}
-              {tab === "voices" ? "Voice Casting" : tab === "production" ? "Production" : tab === "screenplay" ? "Screenplay" : tab === "audio" ? "Audio Player" : tab}
-            </button>
-          ))}
+      {/* Reader mode — clean chapter list, no tabs.
+          Studio mode — full tab strip with all generation views. */}
+      {!studioMode ? (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-display text-lg sm:text-xl font-semibold text-ink-900 dark:text-ink-100">
+              Chapters
+            </h3>
+            <span className="font-ui text-xs sm:text-sm text-ink-400">
+              {chapters.length} chapter{chapters.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+          <ChaptersTab chapters={chapters} bookId={book.id} bookmark={book.listen_bookmark || 0} />
         </div>
-      </div>
+      ) : (
+        <>
+          {/* Tabs — horizontal scroll on mobile so all tabs reach with thumb */}
+          <div className="max-w-7xl mx-auto px-4 sm:px-6">
+            <div className="flex gap-1 border-b border-ink-200/30 dark:border-ink-800/30 overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0 scrollbar-thin">
+              {(["chapters", "characters", "voices", "production", "screenplay", "audio"] as Tab[]).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={cn(
+                    "px-3 sm:px-5 py-3 font-ui text-xs sm:text-sm font-medium whitespace-nowrap capitalize transition-all duration-200 border-b-2 -mb-px min-h-[44px]",
+                    activeTab === tab
+                      ? "border-amber-warm text-amber-warm"
+                      : "border-transparent text-ink-500 dark:text-ink-400 hover:text-ink-700 dark:hover:text-ink-200"
+                  )}
+                >
+                  {tab === "chapters" && <FileText className="w-4 h-4 inline mr-1.5 sm:mr-2 -mt-0.5" />}
+                  {tab === "characters" && <Users className="w-4 h-4 inline mr-1.5 sm:mr-2 -mt-0.5" />}
+                  {tab === "voices" && <Volume2 className="w-4 h-4 inline mr-1.5 sm:mr-2 -mt-0.5" />}
+                  {tab === "production" && <Radio className="w-4 h-4 inline mr-1.5 sm:mr-2 -mt-0.5" />}
+                  {tab === "screenplay" && <Pencil className="w-4 h-4 inline mr-1.5 sm:mr-2 -mt-0.5" />}
+                  {tab === "audio" && <Headphones className="w-4 h-4 inline mr-1.5 sm:mr-2 -mt-0.5" />}
+                  {tab === "voices" ? "Voices" : tab === "production" ? "Production" : tab === "screenplay" ? "Screenplay" : tab === "audio" ? "Audio" : tab}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      {/* Tab content */}
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        {activeTab === "chapters" && (
-          <ChaptersTab chapters={chapters} bookId={book.id} />
-        )}
-        {activeTab === "characters" && (
-          <CharactersTab characters={characters} onDetect={handleDetectCharacters} detecting={detecting} />
-        )}
-        {activeTab === "voices" && (
-          <VoiceCastingTab
-            bookId={book.id}
-            characters={characters}
-            voices={voices}
-            onCharactersUpdated={setCharacters}
-            onDetect={handleDetectCharacters}
-            detecting={detecting}
-          />
-        )}
-        {activeTab === "production" && (
-          <ProductionTab
-            bookId={book.id}
-            book={book}
-            chapters={chapters}
-            hasCharacters={characters.length > 0}
-            onBookUpdate={setBook}
-            batchMode={batchMode}
-            setBatchMode={setBatchMode}
-          />
-        )}
-        {activeTab === "screenplay" && (
-          <ScreenplayViewTab
-            bookId={book.id}
-            chapters={chapters}
-            characters={characters}
-            initialMode={batchMode}
-          />
-        )}
-        {activeTab === "audio" && (
-          <AudioPlayerTab
-            bookId={book.id}
-            chapters={chapters}
-            characters={characters}
-            preferredMode={batchMode}
-          />
-        )}
-      </div>
+          {/* Tab content */}
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+            {activeTab === "chapters" && (
+              <ChaptersTab chapters={chapters} bookId={book.id} bookmark={book.listen_bookmark || 0} />
+            )}
+            {activeTab === "characters" && (
+              <CharactersTab characters={characters} onDetect={handleDetectCharacters} detecting={detecting} />
+            )}
+            {activeTab === "voices" && (
+              <VoiceCastingTab
+                bookId={book.id}
+                characters={characters}
+                voices={voices}
+                onCharactersUpdated={setCharacters}
+                onDetect={handleDetectCharacters}
+                detecting={detecting}
+              />
+            )}
+            {activeTab === "production" && (
+              <ProductionTab
+                bookId={book.id}
+                book={book}
+                chapters={chapters}
+                hasCharacters={characters.length > 0}
+                onBookUpdate={setBook}
+                batchMode={batchMode}
+                setBatchMode={setBatchMode}
+              />
+            )}
+            {activeTab === "screenplay" && (
+              <ScreenplayViewTab
+                bookId={book.id}
+                chapters={chapters}
+                characters={characters}
+                initialMode={batchMode}
+              />
+            )}
+            {activeTab === "audio" && (
+              <AudioPlayerTab
+                bookId={book.id}
+                chapters={chapters}
+                characters={characters}
+                preferredMode={batchMode}
+              />
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -292,36 +353,53 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
   );
 }
 
-function ChaptersTab({ chapters, bookId }: { chapters: Chapter[]; bookId: string }) {
+function ChaptersTab({ chapters, bookId, bookmark = 0 }: { chapters: Chapter[]; bookId: string; bookmark?: number }) {
   const router = useRouter();
   return (
     <div className="space-y-2">
-      {chapters.map((ch, i) => (
-        <button
-          key={ch.id}
-          onClick={() => router.push(`/book/${bookId}/read/${ch.number}`)}
-          className="w-full glass-card px-5 py-4 flex items-center justify-between group hover:shadow-md transition-all duration-200 animate-slide-up"
-          style={{ animationDelay: `${i * 30}ms`, animationFillMode: "both" }}
-        >
-          <div className="flex items-center gap-4">
-            <span className="w-8 h-8 rounded-lg bg-ink-100 dark:bg-ink-800 flex items-center justify-center font-mono text-sm text-ink-500 dark:text-ink-400">
-              {ch.number}
-            </span>
-            <div className="text-left">
-              <p className="font-ui font-medium text-ink-800 dark:text-ink-200 group-hover:text-amber-warm transition-colors">
-                {ch.title || `Chapter ${ch.number}`}
-              </p>
-              <p className="font-ui text-xs text-ink-400 mt-0.5">
-                {formatWordCount(ch.word_count)} · {formatDuration(ch.word_count)}
-              </p>
+      {chapters.map((ch, i) => {
+        const isRead = ch.number <= bookmark;
+        const isNext = ch.number === bookmark + 1;
+        return (
+          <button
+            key={ch.id}
+            onClick={() => router.push(`/book/${bookId}/read/${ch.number}`)}
+            className={cn(
+              "w-full glass-card px-4 sm:px-5 py-4 flex items-center justify-between group hover:shadow-md transition-all duration-200 animate-slide-up min-h-[64px]",
+              isNext && "ring-2 ring-amber-warm/40"
+            )}
+            style={{ animationDelay: `${Math.min(i, 20) * 30}ms`, animationFillMode: "both" }}
+          >
+            <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+              <span className={cn(
+                "w-8 h-8 rounded-lg flex items-center justify-center font-mono text-sm flex-shrink-0",
+                isRead
+                  ? "bg-stage-green/10 text-stage-green"
+                  : isNext
+                  ? "bg-amber-warm/15 text-amber-warm"
+                  : "bg-ink-100 dark:bg-ink-800 text-ink-500 dark:text-ink-400"
+              )}>
+                {isRead ? <CheckCircle2 className="w-4 h-4" /> : ch.number}
+              </span>
+              <div className="text-left min-w-0">
+                <p className={cn(
+                  "font-ui font-medium truncate group-hover:text-amber-warm transition-colors",
+                  isRead ? "text-ink-500 dark:text-ink-500" : "text-ink-800 dark:text-ink-200"
+                )}>
+                  {ch.title || `Chapter ${ch.number}`}
+                </p>
+                <p className="font-ui text-xs text-ink-400 mt-0.5">
+                  {formatWordCount(ch.word_count)} · {formatDuration(ch.word_count)}
+                </p>
+              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <StatusBadge status={ch.status} />
-            <ChevronRight className="w-4 h-4 text-ink-300 group-hover:text-amber-warm group-hover:translate-x-0.5 transition-all" />
-          </div>
-        </button>
-      ))}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <StatusBadge status={ch.status} />
+              <ChevronRight className="w-4 h-4 text-ink-300 group-hover:text-amber-warm group-hover:translate-x-0.5 transition-all" />
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1139,6 +1217,7 @@ function ScreenplayViewTab({
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"radio_play" | "faithful">(initialMode);
   const [currentlyPlayingIndex, setCurrentlyPlayingIndex] = useState<number | null>(null);
+  const ttsSpeed = useLibraryStore((s) => s.ttsSpeed);
 
   // ── Audio engine ────────────────────────────────────────────────────────────
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1173,6 +1252,7 @@ function ScreenplayViewTab({
     if (!seg?.audio_url) { setCurrentlyPlayingIndex(null); return; }
 
     const audio = new Audio(buildAudioUrl(seg.audio_url));
+    audio.playbackRate = ttsSpeed;  // honor the global TTS speed pref
     audioRef.current = audio;
     setCurrentlyPlayingIndex(index);
 
@@ -1185,6 +1265,11 @@ function ScreenplayViewTab({
     };
     audio.onerror = () => { audioRef.current = null; setCurrentlyPlayingIndex(null); };
   };
+
+  // Live-update playback rate when the user changes ttsSpeed mid-playback.
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.playbackRate = ttsSpeed;
+  }, [ttsSpeed]);
 
   // Stop audio when tab unmounts
   useEffect(() => () => { audioRef.current?.pause(); }, []);
@@ -1380,6 +1465,7 @@ function AudioPlayerTab({
   const [screenplay, setScreenplay] = useState<Screenplay | null>(null);
   const [loadingScreenplay, setLoadingScreenplay] = useState(false);
   const [currentlyPlayingIndex, setCurrentlyPlayingIndex] = useState<number | null>(null);
+  const ttsSpeed = useLibraryStore((s) => s.ttsSpeed);
 
   // ── Audio engine ────────────────────────────────────────────────────────────
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1412,6 +1498,7 @@ function AudioPlayerTab({
     if (!seg?.audio_url) { setCurrentlyPlayingIndex(null); return; }
 
     const audio = new Audio(buildAudioUrl(seg.audio_url));
+    audio.playbackRate = ttsSpeed;  // honor the global TTS speed pref
     audioRef.current = audio;
     setCurrentlyPlayingIndex(index);
 
@@ -1424,6 +1511,11 @@ function AudioPlayerTab({
     };
     audio.onerror = () => { audioRef.current = null; setCurrentlyPlayingIndex(null); };
   };
+
+  // Live-update playback rate when the user changes ttsSpeed mid-playback.
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.playbackRate = ttsSpeed;
+  }, [ttsSpeed]);
 
   // Stop audio when tab unmounts
   useEffect(() => () => { audioRef.current?.pause(); }, []);

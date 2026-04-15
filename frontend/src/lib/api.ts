@@ -233,6 +233,10 @@ export async function deleteBook(id: string): Promise<void> {
   await request(`/api/books/${id}`, { method: "DELETE" });
 }
 
+export async function refreshBookCover(id: string): Promise<Book> {
+  return request(`/api/books/${id}/refresh-cover`, { method: "POST" });
+}
+
 // === Chapters ===
 
 export async function getChapters(bookId: string): Promise<Chapter[]> {
