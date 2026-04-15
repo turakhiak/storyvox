@@ -109,12 +109,33 @@ export default function ScreenplayPage() {
       .finally(() => setLoading(false));
   }, [id, num, mode]);
 
-  // Polling logic for async generation
+  // Polling logic for async generation.
+  //
+  // Terminal states handled explicitly below so the "generating" / "generatingAudio"
+  // spinners don't run forever. The `generating` flag is cleared when screenplay.status
+  // leaves "processing"; `generatingAudio` is cleared when audio_status leaves
+  // "processing". `failed` / `partial` statuses also surface an error message.
   useEffect(() => {
     if (!screenplay || !chapter) return;
-    
-    const needsPolling = 
-      screenplay.status === "processing" || 
+
+    // Clear spinners on any terminal status (complete, failed, partial).
+    if (screenplay.status !== "processing") {
+      setGenerating(false);
+      if (screenplay.status === "failed") {
+        setError("Screenplay generation failed. Check server logs, then retry.");
+      }
+    }
+    if (screenplay.audio_status !== "processing") {
+      setGeneratingAudio(false);
+      if (screenplay.audio_status === "failed") {
+        setError("Audio generation failed for every segment. Check TTS configuration and retry.");
+      } else if (screenplay.audio_status === "partial") {
+        setError("Audio generation finished with some failures. Use 'Regenerate Audio' to retry the missing segments.");
+      }
+    }
+
+    const needsPolling =
+      screenplay.status === "processing" ||
       screenplay.audio_status === "processing";
 
     if (!needsPolling) return;
@@ -123,7 +144,9 @@ export default function ScreenplayPage() {
       try {
         const updated = await getScreenplay(chapter.id, mode);
         setScreenplay(updated);
-        
+
+        // Load revisions the moment the screenplay completes — the next effect run
+        // (triggered by the status change) also handles spinner/error housekeeping.
         if (updated.status === "complete" && screenplay.status === "processing") {
           const revs = await getRevisions(updated.chapter_id, mode);
           setRevisions(revs);

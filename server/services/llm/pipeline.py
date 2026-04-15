@@ -434,6 +434,17 @@ class ScreenplayPipeline:
 
         final_weighted_avg = self._calc_weighted_avg(final_scores, weights)
 
+        # best_round = round_number of the overall highest-scoring draft across all chunks.
+        # Used by callers to mark `is_best=True` on the winning RevisionRound row.
+        # With multi-chunk processing this is imperfect (rounds from different chunks share
+        # round_numbers), but it's far better than hardcoding 1 — which made all round-1
+        # drafts look "best" even when rounds 2 or 3 won the weighted average.
+        if all_rounds:
+            best_rnd = max(all_rounds, key=lambda r: r.weighted_avg)
+            best_round_num = best_rnd.round_number
+        else:
+            best_round_num = 1
+
         # === SOUND DESIGNER — radio play only, skip for audiobook ===
         sound_plan = None
         if not is_audiobook:
@@ -462,7 +473,7 @@ class ScreenplayPipeline:
             total_rounds=len(all_rounds),
             final_scores=final_scores,
             final_weighted_avg=final_weighted_avg,
-            best_round=1,
+            best_round=best_round_num,
             sound_plan=sound_plan,
         )
 
