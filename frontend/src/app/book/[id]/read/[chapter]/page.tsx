@@ -18,6 +18,9 @@ import {
   type Bookmark as BookmarkEntry,
   listBookmarks, addBookmark, removeBookmark,
 } from "@/lib/bookmarks";
+import {
+  getListeningPosition, saveListeningPosition,
+} from "@/lib/listening-position";
 
 // Build absolute URL from a relative audio path served by the API.
 function buildAudioUrl(relUrl: string): string {
@@ -52,6 +55,12 @@ export default function ReaderPage() {
   // Segment index from ?seg=N — used to scroll into view after the
   // screenplay loads (deep links from a bookmark in another chapter).
   const pendingSegmentRef = useRef<number | null>(null);
+
+  // Auto-resume target for THIS chapter. Pulled from localStorage on
+  // chapter land — null if the saved position is for a different chapter
+  // or the user was at the very top. Cleared when playback starts past
+  // the resume point (see playSegment).
+  const [resumeSegmentIndex, setResumeSegmentIndex] = useState<number | null>(null);
 
   // Audio playback state
   const [screenplay, setScreenplay] = useState<Screenplay | null>(null);
@@ -114,6 +123,19 @@ export default function ReaderPage() {
     if (!id) return;
     setBookmarks(listBookmarks(id));
   }, [id, showBookmarks]);
+
+  // Decide whether this chapter has a saved resume point. We only honor
+  // it if the saved chapter matches the current chapter AND it's past
+  // the first playable segment — otherwise there's nothing to "resume".
+  useEffect(() => {
+    if (!id || !num) return;
+    const saved = getListeningPosition(id);
+    if (saved && saved.chapterNum === num && saved.segmentIndex > 0) {
+      setResumeSegmentIndex(saved.segmentIndex);
+    } else {
+      setResumeSegmentIndex(null);
+    }
+  }, [id, num]);
 
   // Capture ?seg=N once per chapter load so we can scroll there once
   // the screenplay is hydrated (refs for individual segments only exist
@@ -180,6 +202,12 @@ export default function ReaderPage() {
     audio.playbackRate = ttsSpeed;
     audioRef.current = audio;
     setPlayingIndex(index);
+    // Persist the resume anchor — every time we start a segment, this
+    // becomes the point we'd come back to if the user closed the tab.
+    if (id) saveListeningPosition(id, num, index);
+    // Clear the "resume hint" once the user has actually moved past the
+    // saved spot — the button text flips back to plain "Listen" / "Pause".
+    setResumeSegmentIndex(null);
 
     // Scroll the active segment into view if it has a DOM ref
     const node = segmentRefs.current[index];
@@ -202,6 +230,10 @@ export default function ReaderPage() {
         setPlayingIndex(null);
         // Auto-advance to the next chapter if there is one
         if (num < totalChapters) {
+          // Park the resume anchor at the top of the next chapter so
+          // "Continue" deep-links cleanly if the user leaves before
+          // autoplay triggers on the new chapter.
+          if (id) saveListeningPosition(id, num + 1, 0);
           // Small delay so the "finished" state is visible for a moment
           setTimeout(() => goToChapter(num + 1), 800);
         }
@@ -214,7 +246,7 @@ export default function ReaderPage() {
       if (next !== -1) playSegment(next, segments);
       else setPlayingIndex(null);
     };
-  }, [ttsSpeed, num, totalChapters, goToChapter, nextPlayableFrom]);
+  }, [ttsSpeed, num, totalChapters, goToChapter, nextPlayableFrom, id]);
 
   // Live-update playback rate when user changes ttsSpeed mid-playback
   useEffect(() => {
@@ -316,16 +348,32 @@ export default function ReaderPage() {
     [id, num, router, stopAudio],
   );
 
-  // Toggle play/pause from any control
+  // Toggle play/pause from any control. If there's a saved resume point
+  // for this chapter we honor it — so clicking Listen after closing and
+  // reopening picks up where the user left off instead of restarting
+  // from the top.
   const togglePlay = useCallback(() => {
     if (!screenplay) return;
     if (playingIndex !== null) {
       stopAudio();
-    } else {
-      const first = nextPlayableFrom(screenplay.segments, 0);
-      if (first !== -1) playSegment(first, screenplay.segments);
+      return;
     }
-  }, [screenplay, playingIndex, stopAudio, nextPlayableFrom, playSegment]);
+    const startFrom =
+      resumeSegmentIndex !== null && resumeSegmentIndex < screenplay.segments.length
+        ? resumeSegmentIndex
+        : 0;
+    const first = nextPlayableFrom(screenplay.segments, startFrom);
+    if (first !== -1) playSegment(first, screenplay.segments);
+  }, [screenplay, playingIndex, stopAudio, nextPlayableFrom, playSegment, resumeSegmentIndex]);
+
+  // Explicit "play from the top" escape hatch — clears the resume hint
+  // and starts at segment 0 regardless of saved state.
+  const playFromStart = useCallback(() => {
+    if (!screenplay) return;
+    setResumeSegmentIndex(null);
+    const first = nextPlayableFrom(screenplay.segments, 0);
+    if (first !== -1) playSegment(first, screenplay.segments);
+  }, [screenplay, nextPlayableFrom, playSegment]);
 
   const skipBack = useCallback(() => {
     if (!screenplay || playingIndex === null) return;
@@ -642,26 +690,52 @@ export default function ReaderPage() {
 
           {/* Audio CTA — appears only after we know whether audio exists.
               When audio exists we offer a big Listen button; when it doesn't
-              we show a quiet hint so the user knows the Studio can make one. */}
+              we show a quiet hint so the user knows the Studio can make one.
+              If the user previously paused mid-chapter, the button offers
+              to resume from the saved segment. */}
           {!loadingAudio && hasAudio && (
-            <button
-              onClick={togglePlay}
-              className={cn(
-                "mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-full font-ui text-sm font-medium transition-all min-h-[44px]",
-                playingIndex !== null
-                  ? "bg-amber-warm/20 text-amber-warm hover:bg-amber-warm/30"
-                  : "bg-amber-warm text-ink-950 hover:bg-amber-warm/90 shadow-md"
+            <div className="mt-6 flex flex-col items-center gap-2">
+              <button
+                onClick={togglePlay}
+                className={cn(
+                  "inline-flex items-center gap-2 px-5 py-2.5 rounded-full font-ui text-sm font-medium transition-all min-h-[44px]",
+                  playingIndex !== null
+                    ? "bg-amber-warm/20 text-amber-warm hover:bg-amber-warm/30"
+                    : "bg-amber-warm text-ink-950 hover:bg-amber-warm/90 shadow-md"
+                )}
+              >
+                {playingIndex !== null ? (
+                  <><Pause className="w-4 h-4" /> Pause</>
+                ) : resumeSegmentIndex !== null ? (
+                  <>
+                    <Play className="w-4 h-4 fill-current" />
+                    Resume
+                    <span className="opacity-70 text-xs ml-0.5">
+                      · segment {resumeSegmentIndex + 1} / {playableSegments.length}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4 fill-current" />
+                    Listen to this chapter
+                    <span className="opacity-60 text-xs ml-1">
+                      · {playableSegments.length} segments
+                      {!audioComplete && screenplay?.audio_status === "partial" && " (partial)"}
+                    </span>
+                  </>
+                )}
+              </button>
+              {/* Escape hatch so the resume hint isn't sticky */}
+              {resumeSegmentIndex !== null && playingIndex === null && (
+                <button
+                  onClick={playFromStart}
+                  className="font-ui text-[11px] opacity-50 hover:opacity-100 hover:underline transition-opacity min-h-[28px]"
+                  title="Start this chapter from segment 1"
+                >
+                  Start from beginning
+                </button>
               )}
-            >
-              {playingIndex !== null
-                ? <><Pause className="w-4 h-4" /> Pause</>
-                : <><Play className="w-4 h-4 fill-current" /> Listen to this chapter</>
-              }
-              <span className="opacity-60 text-xs ml-1">
-                · {playableSegments.length} segments
-                {!audioComplete && screenplay?.audio_status === "partial" && " (partial)"}
-              </span>
-            </button>
+            </div>
           )}
           {!loadingAudio && !hasAudio && (
             <div className="mt-5 flex flex-col items-center gap-2">
