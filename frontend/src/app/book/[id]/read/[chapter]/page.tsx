@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft, ChevronLeft, ChevronRight, Settings,
   Minus, Plus, Loader2, Type, Gauge, Play, Pause,
   SkipForward, SkipBack, Headphones, Volume2,
+  Wand2, Bookmark, BookmarkPlus, Trash2, ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -13,6 +14,10 @@ import {
 } from "@/lib/api";
 import type { Book, Chapter, Screenplay, ScreenplaySegment } from "@/lib/api";
 import { useLibraryStore, READER_FONTS, type ReaderFontId } from "@/store/library";
+import {
+  type Bookmark as BookmarkEntry,
+  listBookmarks, addBookmark, removeBookmark,
+} from "@/lib/bookmarks";
 
 // Build absolute URL from a relative audio path served by the API.
 function buildAudioUrl(relUrl: string): string {
@@ -24,6 +29,7 @@ function buildAudioUrl(relUrl: string): string {
 export default function ReaderPage() {
   const { id, chapter: chapterNum } = useParams<{ id: string; chapter: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const {
     readerFontSize, setReaderFontSize,
     readerFontFamily, setReaderFontFamily,
@@ -34,8 +40,18 @@ export default function ReaderPage() {
   const [book, setBook] = useState<Book | null>(null);
   const [chapter, setChapter] = useState<Chapter | null>(null);
   const [totalChapters, setTotalChapters] = useState(0);
+  // Settings and Bookmarks panels are mutually exclusive — opening one
+  // closes the other so the nav chrome doesn't blow up on mobile.
   const [showSettings, setShowSettings] = useState(false);
+  const [showBookmarks, setShowBookmarks] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // User-managed bookmarks for this book (localStorage-backed). Kept in
+  // state so the panel re-renders immediately after add/remove.
+  const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
+  // Segment index from ?seg=N — used to scroll into view after the
+  // screenplay loads (deep links from a bookmark in another chapter).
+  const pendingSegmentRef = useRef<number | null>(null);
 
   // Audio playback state
   const [screenplay, setScreenplay] = useState<Screenplay | null>(null);
@@ -91,6 +107,28 @@ export default function ReaderPage() {
     if (!id || !num || num < 2) return;
     updateBookmark(id, num - 1).catch(() => {});
   }, [id, num]);
+
+  // Load user bookmarks for this book. Re-runs when the book id changes OR
+  // when the panel opens so we see fresh entries across chapters.
+  useEffect(() => {
+    if (!id) return;
+    setBookmarks(listBookmarks(id));
+  }, [id, showBookmarks]);
+
+  // Capture ?seg=N once per chapter load so we can scroll there once
+  // the screenplay is hydrated (refs for individual segments only exist
+  // after the first render of SegmentProse).
+  useEffect(() => {
+    const raw = searchParams?.get("seg");
+    if (raw == null) {
+      pendingSegmentRef.current = null;
+      return;
+    }
+    const n = parseInt(raw, 10);
+    pendingSegmentRef.current = Number.isFinite(n) ? n : null;
+    // We don't clear the query param — harmless, and lets the user copy
+    // the URL to share a specific spot.
+  }, [searchParams, num]);
 
   // Stop any in-flight audio when the user navigates away or chapter changes.
   // Without this the audio keeps playing into the next chapter's load screen.
@@ -188,6 +226,96 @@ export default function ReaderPage() {
   const hasAudio = playableSegments.length > 0;
   const audioComplete = screenplay?.audio_status === "complete";
 
+  // Once the screenplay is loaded (or if there's no screenplay at all),
+  // honor a pending ?seg=N scroll target. Uses rAF so we land after the
+  // initial segment refs have been attached. A brief highlight draws the
+  // eye to the spot the user jumped to.
+  useEffect(() => {
+    if (pendingSegmentRef.current === null) return;
+    if (loadingAudio) return;
+    const target = pendingSegmentRef.current;
+    pendingSegmentRef.current = null;
+    const raf = requestAnimationFrame(() => {
+      const node = segmentRefs.current[target];
+      if (!node) return;
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+      // Momentary highlight so the user sees where they landed even if
+      // nothing is currently playing.
+      node.classList.add("ring-2", "ring-amber-warm/60");
+      setTimeout(
+        () => node.classList.remove("ring-2", "ring-amber-warm/60"),
+        1600,
+      );
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [loadingAudio, screenplay]);
+
+  // Build a short preview of the bookmarked spot. For segment-level
+  // bookmarks we use the segment's own text; for top-of-chapter bookmarks
+  // we fall back to the chapter title.
+  const snippetForSegment = (segIdx: number): string => {
+    if (segIdx < 0) return "Start of chapter";
+    const seg = screenplay?.segments[segIdx];
+    if (!seg) return "Start of chapter";
+    const t = (seg.text || "").trim();
+    return t.length > 80 ? `${t.slice(0, 80)}…` : t;
+  };
+
+  const handleAddBookmark = useCallback(() => {
+    if (!id || !chapter) return;
+    // Use the currently-playing segment if any, else mark top-of-chapter.
+    const segIdx = playingIndex !== null ? playingIndex : -1;
+    addBookmark({
+      bookId: id,
+      chapterNum: num,
+      chapterTitle: chapter.title || `Chapter ${num}`,
+      segmentIndex: segIdx,
+      snippet: snippetForSegment(segIdx),
+    });
+    setBookmarks(listBookmarks(id));
+    // Pop the panel open so the user sees the new entry land.
+    setShowBookmarks(true);
+    setShowSettings(false);
+  }, [id, chapter, num, playingIndex, screenplay]);
+
+  const handleRemoveBookmark = useCallback(
+    (bookmarkId: string) => {
+      if (!id) return;
+      removeBookmark(id, bookmarkId);
+      setBookmarks(listBookmarks(id));
+    },
+    [id],
+  );
+
+  // Jump to a bookmark — same-chapter bookmarks just scroll; other
+  // chapters navigate with ?seg=N so the target effect picks it up.
+  const handleGotoBookmark = useCallback(
+    (bm: BookmarkEntry) => {
+      if (bm.chapterNum === num) {
+        if (bm.segmentIndex >= 0) {
+          const node = segmentRefs.current[bm.segmentIndex];
+          if (node) {
+            node.scrollIntoView({ behavior: "smooth", block: "center" });
+            node.classList.add("ring-2", "ring-amber-warm/60");
+            setTimeout(
+              () => node.classList.remove("ring-2", "ring-amber-warm/60"),
+              1600,
+            );
+          }
+        } else {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+        setShowBookmarks(false);
+        return;
+      }
+      // Different chapter — route there with the segment index in the query.
+      stopAudio();
+      const suffix = bm.segmentIndex >= 0 ? `?seg=${bm.segmentIndex}` : "";
+      router.push(`/book/${id}/read/${bm.chapterNum}${suffix}`);
+    },
+    [id, num, router, stopAudio],
+  );
+
   // Toggle play/pause from any control
   const togglePlay = useCallback(() => {
     if (!screenplay) return;
@@ -256,27 +384,67 @@ export default function ReaderPage() {
     <div className={cn("min-h-screen transition-colors duration-300", bgClass)}>
       {/* Reader nav */}
       <nav className="sticky top-0 z-40 backdrop-blur-xl bg-inherit/80 border-b border-ink-200/10 dark:border-ink-800/20">
-        <div className="max-w-4xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
+        <div className="max-w-4xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-1.5 sm:gap-2">
           <button
             onClick={() => router.push(`/book/${id}`)}
             className="flex items-center gap-1.5 sm:gap-2 text-sm opacity-60 hover:opacity-100 transition-opacity min-h-[44px] px-2"
             aria-label="Back to book"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span className="font-ui hidden sm:inline truncate max-w-[200px]">{book?.title}</span>
+            <span className="font-ui hidden sm:inline truncate max-w-[180px]">{book?.title}</span>
           </button>
 
-          <span className="font-ui text-xs sm:text-sm opacity-50 truncate">
+          <span className="font-ui text-xs sm:text-sm opacity-50 truncate flex-1 text-center px-2">
             {chapter?.title || `Chapter ${num}`}
           </span>
 
-          <button
-            onClick={() => setShowSettings(!showSettings)}
-            className="w-11 h-11 rounded-lg flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity flex-shrink-0"
-            aria-label="Reader settings"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+            {/* Studio shortcut — jumps to the book page with Studio auto-opened
+                so the user can generate audio / screenplay without hunting for
+                the toggle. Respects ?studio=1 on /book/[id]. */}
+            <button
+              onClick={() => router.push(`/book/${id}?studio=1`)}
+              className="w-11 h-11 rounded-lg flex items-center justify-center opacity-60 hover:opacity-100 hover:bg-ink-100/10 transition-all flex-shrink-0"
+              aria-label="Open Studio"
+              title="Open Studio (generate screenplay & audio)"
+            >
+              <Wand2 className="w-4 h-4" />
+            </button>
+
+            {/* Bookmarks panel toggle. The icon fills when there are bookmarks
+                so it's obvious the list isn't empty — subtle but useful. */}
+            <button
+              onClick={() => {
+                setShowBookmarks((v) => !v);
+                setShowSettings(false);
+              }}
+              className={cn(
+                "w-11 h-11 rounded-lg flex items-center justify-center transition-all flex-shrink-0 hover:bg-ink-100/10",
+                showBookmarks ? "opacity-100 text-amber-warm" : "opacity-60 hover:opacity-100",
+              )}
+              aria-label="Bookmarks"
+              title="Bookmarks"
+            >
+              <Bookmark
+                className={cn("w-4 h-4", bookmarks.length > 0 && "fill-current")}
+              />
+            </button>
+
+            <button
+              onClick={() => {
+                setShowSettings((v) => !v);
+                setShowBookmarks(false);
+              }}
+              className={cn(
+                "w-11 h-11 rounded-lg flex items-center justify-center transition-all flex-shrink-0 hover:bg-ink-100/10",
+                showSettings ? "opacity-100 text-amber-warm" : "opacity-60 hover:opacity-100",
+              )}
+              aria-label="Reader settings"
+              title="Reader settings"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Settings panel — ereader-style toolbar */}
@@ -377,6 +545,85 @@ export default function ReaderPage() {
             </div>
           </div>
         )}
+
+        {/* Bookmarks panel — same placement as settings, mutually exclusive.
+            "Bookmark this spot" row up top; the list below. Empty state
+            explains the button so first-time users aren't guessing. */}
+        {showBookmarks && (
+          <div className="border-t border-ink-200/10 dark:border-ink-800/20 animate-slide-up">
+            <div className="max-w-4xl mx-auto px-3 sm:px-6 py-3 sm:py-4">
+              <div className="flex items-center justify-between gap-3 pb-3 border-b border-ink-200/10 dark:border-ink-800/30">
+                <div className="min-w-0">
+                  <h3 className="font-ui text-sm font-medium">Bookmarks</h3>
+                  <p className="font-ui text-[11px] opacity-50 mt-0.5">
+                    {playingIndex !== null
+                      ? "Mark the line currently playing so you can return later."
+                      : "Mark your place so you can come back to it later."}
+                  </p>
+                </div>
+                <button
+                  onClick={handleAddBookmark}
+                  className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 h-9 rounded-lg bg-amber-warm/15 text-amber-warm hover:bg-amber-warm/25 transition-colors font-ui text-xs font-medium"
+                  title="Bookmark this spot"
+                >
+                  <BookmarkPlus className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Bookmark this spot</span>
+                  <span className="sm:hidden">Add</span>
+                </button>
+              </div>
+
+              {bookmarks.length === 0 ? (
+                <p className="font-ui text-xs opacity-40 mt-4 text-center py-3">
+                  No bookmarks yet for this book.
+                </p>
+              ) : (
+                <ul className="mt-2 max-h-72 overflow-y-auto divide-y divide-ink-200/10 dark:divide-ink-800/30">
+                  {bookmarks.map((bm) => {
+                    const isHere =
+                      bm.chapterNum === num &&
+                      (playingIndex !== null
+                        ? bm.segmentIndex === playingIndex
+                        : bm.segmentIndex === -1);
+                    return (
+                      <li key={bm.id} className="py-2 flex items-start gap-2">
+                        <button
+                          onClick={() => handleGotoBookmark(bm)}
+                          className={cn(
+                            "flex-1 text-left min-w-0 px-2 py-1.5 rounded-md hover:bg-ink-100/10 transition-colors",
+                            isHere && "bg-amber-warm/10",
+                          )}
+                          title="Jump to this bookmark"
+                        >
+                          <div className="flex items-center gap-1.5 text-[11px] opacity-60 font-ui">
+                            <span>Ch. {bm.chapterNum}</span>
+                            <span className="opacity-40">·</span>
+                            <span className="truncate max-w-[160px]">
+                              {bm.chapterTitle}
+                            </span>
+                            {bm.chapterNum !== num && (
+                              <ExternalLink className="w-3 h-3 opacity-40" />
+                            )}
+                          </div>
+                          <div className="font-ui text-xs mt-0.5 line-clamp-2 opacity-90">
+                            {bm.snippet}
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => handleRemoveBookmark(bm.id)}
+                          className="w-8 h-8 rounded-lg opacity-40 hover:opacity-100 hover:text-stage-red flex items-center justify-center flex-shrink-0 transition-all"
+                          aria-label="Remove bookmark"
+                          title="Remove bookmark"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
       </nav>
 
       {/* Chapter content — pad bottom to clear the sticky audio bar */}
@@ -417,9 +664,19 @@ export default function ReaderPage() {
             </button>
           )}
           {!loadingAudio && !hasAudio && (
-            <p className="mt-5 font-ui text-xs opacity-40 max-w-sm mx-auto">
-              No audio yet for this chapter — open the Studio (top-right of the book page) to generate it.
-            </p>
+            <div className="mt-5 flex flex-col items-center gap-2">
+              <p className="font-ui text-xs opacity-40 max-w-sm">
+                No audio yet for this chapter.
+              </p>
+              <button
+                onClick={() => router.push(`/book/${id}?studio=1`)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-ui font-medium bg-ink-100/10 hover:bg-amber-warm/15 hover:text-amber-warm border border-ink-200/20 transition-all min-h-[36px]"
+                title="Open Studio to generate audio for this chapter"
+              >
+                <Wand2 className="w-3.5 h-3.5" />
+                Open Studio to generate
+              </button>
+            </div>
           )}
         </div>
 
@@ -523,6 +780,17 @@ export default function ReaderPage() {
 
             {/* Transport controls — bigger touch targets on mobile */}
             <div className="flex items-center gap-1 flex-shrink-0">
+              {/* Inline bookmark — captures the currently-playing segment
+                  without having to open the panel. Hidden on narrow mobile
+                  to keep the transport controls from wrapping. */}
+              <button
+                onClick={handleAddBookmark}
+                className="hidden sm:flex w-10 h-10 rounded-full items-center justify-center hover:bg-amber-warm/20 hover:text-amber-warm transition-colors opacity-70"
+                aria-label="Bookmark this spot"
+                title="Bookmark this spot"
+              >
+                <BookmarkPlus className="w-4 h-4" />
+              </button>
               <button
                 onClick={skipBack}
                 disabled={playingIndex === null || playingIndex === 0}

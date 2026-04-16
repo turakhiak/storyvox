@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft, BookOpen, Users, Sparkles, Play, FileText, Square,
   ChevronRight, Loader2, Mic, Brain, Radio, Clock,
@@ -50,6 +50,9 @@ const EMOTION_COLORS: Record<string, string> = {
 export default function BookPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  // Reader auto-opens Studio via ?studio=1 — lets a "no audio yet" hint
+  // or a Studio shortcut from the reader bring the user straight here.
+  const searchParams = useSearchParams();
   const [book, setBook] = useState<Book | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
@@ -64,7 +67,11 @@ export default function BookPage() {
   // Studio mode hides production/screenplay/audio tabs by default. A normal
   // reader just sees hero + chapter list. Power users click "Studio" in the
   // nav to reveal characters / voices / production / screenplay / audio.
-  const [studioMode, setStudioMode] = useState(false);
+  // Default can be forced open via ?studio=1 — used by the reader's Studio
+  // shortcut so the user lands with the tabs already visible.
+  const [studioMode, setStudioMode] = useState(
+    () => searchParams?.get("studio") === "1",
+  );
 
   // Show "connecting…" hint if the book hasn't loaded after 8s
   useEffect(() => {
